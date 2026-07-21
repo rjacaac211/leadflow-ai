@@ -1,0 +1,58 @@
+{
+  "name": "LeadFlow — lead capture form",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Talk to Meridian",
+        "formDescription": "Tell us a bit about your team and we'll be in touch.",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "name", "requiredField": true },
+            { "fieldLabel": "email", "fieldType": "email", "requiredField": true },
+            { "fieldLabel": "company" },
+            { "fieldLabel": "website" },
+            { "fieldLabel": "message", "fieldType": "textarea" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9a1f6b1e-0000-4000-8000-000000000001",
+      "name": "Lead Capture Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "leadflow-capture"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://server:4000/api/webhooks/lead",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.LEADFLOW_WEBHOOK_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.name, email: $json.email, company: $json.company, website: $json.website, message: $json.message, source: 'n8n-form' }) }}",
+        "options": {}
+      },
+      "id": "9a1f6b1e-0000-4000-8000-000000000002",
+      "name": "Send to LeadFlow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Lead Capture Form": {
+      "main": [[{ "node": "Send to LeadFlow", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

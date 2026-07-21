@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: leadflow
+      POSTGRES_PASSWORD: leadflow
+      POSTGRES_DB: leadflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leadflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://leadflow:leadflow@postgres:5432/leadflow
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      WEBHOOK_API_KEY: ${WEBHOOK_API_KEY:-}
+      HUBSPOT_ACCESS_TOKEN: ${HUBSPOT_ACCESS_TOKEN:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      PORT: 4000
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: web
+    ports:
+      - "5173:80"
+    depends_on:
+      - server
+
+  # Optional: self-hosted n8n for the committed automation workflow.
+  # Start with: docker compose --profile automation up
+  n8n:
+    image: n8nio/n8n:latest
+    profiles: ["automation"]
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_SECURE_COOKIE: "false"
+      LEADFLOW_WEBHOOK_KEY: ${WEBHOOK_API_KEY:-}
+    volumes:
+      - n8ndata:/home/node/.n8n
+
+volumes:
+  pgdata:
+  n8ndata:
