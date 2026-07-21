@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum LeadStage {
+  NEW
+  QUALIFIED
+  DISQUALIFIED
+  AWAITING_APPROVAL
+  OUTREACH_SENT
+  REPLIED
+  ESCALATED
+  OPTED_OUT
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum MessageStatus {
+  DRAFT
+  REJECTED
+  SENT
+  RECEIVED
+}
+
+model Lead {
+  id                  String            @id @default(cuid())
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  name                String
+  email               String            @unique
+  company             String?
+  companyWebsite      String?           @map("company_website")
+  message             String?
+  source              String            @default("webhook")
+  stage               LeadStage         @default(NEW)
+  score               Int?
+  tier                String?
+  qualificationReason String?           @map("qualification_reason")
+  enrichmentSummary   String?           @map("enrichment_summary")
+  hubspotContactId    String?           @map("hubspot_contact_id")
+  events              LeadEvent[]
+  messages            OutreachMessage[]
+
+  @@map("leads")
+}
+
+model LeadEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now()) @map("created_at")
+  leadId    String   @map("lead_id")
+  type      String
+  detail    Json?
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@map("lead_events")
+}
+
+model OutreachMessage {
+  id        String           @id @default(cuid())
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+  leadId    String           @map("lead_id")
+  direction MessageDirection
+  status    MessageStatus
+  subject   String?
+  body      String
+  lead      Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId, createdAt])
+  @@map("outreach_messages")
+}
