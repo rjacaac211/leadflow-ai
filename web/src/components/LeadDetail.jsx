@@ -1,6 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.js";
 
+const REPLY_PRESETS = [
+  {
+    key: "interested",
+    label: "Interested",
+    text: "This sounds like exactly what we need — can we set up a call this week to see a demo? I'd like to loop in our COO too.",
+  },
+  {
+    key: "question",
+    label: "Question",
+    text: "Before we go further — does this integrate with Salesforce, or does it only work as a standalone tool?",
+  },
+  {
+    key: "optout",
+    label: "Opt-out",
+    text: "Please stop emailing me — we're not evaluating new tools right now and won't be for a while.",
+  },
+];
+
 export function LeadDetail({ leadId, onChanged }) {
   const [lead, setLead] = useState(null);
   const [error, setError] = useState(null);
@@ -172,6 +190,18 @@ function SimulateReply({ lead, onSent }) {
     <details className="new-lead">
       <summary>Simulate a reply from this lead</summary>
       <form onSubmit={send}>
+        <div className="row presets">
+          {REPLY_PRESETS.map((preset) => (
+            <button
+              key={preset.key}
+              type="button"
+              className="secondary preset"
+              onClick={() => setMessage(preset.text)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
         <textarea
           rows={3}
           required

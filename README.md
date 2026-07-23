@@ -17,6 +17,30 @@ Lead arrives (form / webhook)
 
 This is the business-automation counterpart to [NutriGuide AI](https://github.com/rjacaac211/nutriguide-ai) (a conversational RAG agent): together they cover conversational AI *and* autonomous business-process agents.
 
+## Demo
+
+![LeadFlow AI demo](docs/demo.gif)
+
+*A lead comes in, gets scored/tiered by Claude against the ICP rubric, synced to HubSpot, drafted for outreach, approved by a human, sent, and replied to — end to end, one pass.*
+
+<details>
+<summary>How this demo was recorded (for re-recording later)</summary>
+
+1. `docker compose up --build`, wait for `/health` to return OK, open http://localhost:5173.
+2. Click "Simulate an inbound lead" to expand the form.
+3. Click the **Hot example** preset chip, then **Submit lead**.
+4. Wait for "Lead submitted — the agent is qualifying it now," then wait for the new row
+   in the Pipeline table (5s poll; qualification + enrichment + CRM sync take ~10-30s).
+5. Click the row. Narrate the score/tier badge and qualification rationale as they appear.
+6. Wait for stage "Needs approval" — the Approval card appears with a drafted subject/body.
+7. Edit a line of the draft to show it's editable, then click **Approve & send**.
+8. Wait for stage "Outreach sent" — "Simulate a reply from this lead" appears (hidden before this).
+9. Expand it, click the **Interested** preset chip, click **Send reply**.
+10. Wait for `Classified as "interested".` and stage moving to "Escalated".
+11. Stop recording.
+
+</details>
+
 ## Highlights for Employers
 
 | Area | What this project demonstrates |

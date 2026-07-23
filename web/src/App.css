@@ -285,6 +285,33 @@ button.secondary {
   flex: 1;
 }
 
+.presets {
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+
+.preset {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+  margin-top: 0;
+}
+
+.preset-hot {
+  border-color: var(--hot);
+  color: var(--hot);
+}
+
+.preset-warm {
+  border-color: var(--warm);
+  color: var(--warm);
+}
+
+.preset-cold {
+  border-color: var(--cold);
+  color: var(--cold);
+}
+
 .new-lead {
   border: 1px dashed var(--border);
   border-radius: 8px;
