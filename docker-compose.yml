@@ -52,6 +52,7 @@ services:
       - "5678:5678"
     environment:
       N8N_SECURE_COOKIE: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       LEADFLOW_WEBHOOK_KEY: ${WEBHOOK_API_KEY:-}
     volumes:
       - n8ndata:/home/node/.n8n

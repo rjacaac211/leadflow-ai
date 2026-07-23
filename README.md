@@ -184,7 +184,7 @@ Notes on the optional integrations, from setting each of these up live:
 docker compose --profile automation up   # starts n8n on http://localhost:5678
 ```
 
-Import the JSON via n8n → Workflows → Import from File, activate it, and share the form URL. The workflow reads the webhook key from the `LEADFLOW_WEBHOOK_KEY` env var (already wired in docker-compose).
+Import the JSON via n8n → Workflows → Import from File, activate it, and share the form URL (`http://localhost:5678/form/leadflow-capture`, or your host's equivalent). The workflow reads the webhook key from the `LEADFLOW_WEBHOOK_KEY` env var — already wired in `docker-compose.yml`, along with `N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"`, which recent n8n versions require for a node expression to read `$env` at all (without it the HTTP Request node fails with "access to env vars denied" and the form silently drops every submission). Verified live end-to-end: form submission → `POST /api/webhooks/lead` → full qualify/CRM-sync/draft pipeline, landing with `source: "n8n-form"`.
 
 ### Zapier (compatible)
 

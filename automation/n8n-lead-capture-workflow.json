@@ -3,6 +3,7 @@
   "nodes": [
     {
       "parameters": {
+        "path": "leadflow-capture",
         "formTitle": "Talk to Meridian",
         "formDescription": "Tell us a bit about your team and we'll be in touch.",
         "formFields": {
