@@ -41,7 +41,7 @@ This is the business-automation counterpart to [NutriGuide AI](https://github.co
 
 </details>
 
-## Highlights for Employers
+## Highlights
 
 | Area | What this project demonstrates |
 |------|-------------------------------|
