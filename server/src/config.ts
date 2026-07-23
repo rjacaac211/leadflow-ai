@@ -32,7 +32,7 @@ export const config = {
   hubspotAccessToken: process.env.HUBSPOT_ACCESS_TOKEN ?? "",
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   outreachFromEmail:
-    process.env.OUTREACH_FROM_EMAIL ?? "LeadFlow <onboarding@resend.dev>",
+    process.env.OUTREACH_FROM_EMAIL || "LeadFlow <onboarding@resend.dev>",
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
   icp: loadIcpConfig(),
 };
