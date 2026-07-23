@@ -119,6 +119,7 @@ Within a few seconds the lead appears in the dashboard scored and tiered, with a
 # server
 cd server
 npm install
+npx prisma generate         # regenerates the Prisma client — required after npm install
 npx prisma migrate deploy   # needs DATABASE_URL pointing at a running Postgres
 npm run dev                 # tsx watch, port 4000
 
@@ -140,9 +141,14 @@ All configuration is environment variables (see [`.env.example`](.env.example)) 
 | `ANTHROPIC_API_KEY` | ✅ | Claude — qualification, drafting, reply handling |
 | `DATABASE_URL` | ✅ | PostgreSQL (app tables + LangGraph checkpoints) |
 | `WEBHOOK_API_KEY` | recommended | Shared secret for `/api/webhooks/*` (open with a warning if unset — dev only) |
-| `HUBSPOT_ACCESS_TOKEN` | optional | HubSpot private-app token; unset = mock mode |
+| `HUBSPOT_ACCESS_TOKEN` | optional | HubSpot account-scoped token; unset = mock mode |
 | `RESEND_API_KEY`, `OUTREACH_FROM_EMAIL` | optional | Outbound email; unset = mock mode |
 | `SLACK_WEBHOOK_URL` | optional | Hot-lead / handoff notifications; unset = mock mode |
+
+Notes on the optional integrations, from setting each of these up live:
+
+- **HubSpot** — HubSpot's UI has moved private-app creation from "Private Apps" to **Settings → Integrations → Development → Keys → Service Keys** (public beta as of Feb 2026); it issues the same `pat-na1-...`-style bearer token, so no code changes are needed either way. Only the `crm.objects.contacts.read` and `crm.objects.contacts.write` scopes are required — there's no separate notes scope exposed in the scope picker; the Notes API is governed by the contacts scopes.
+- **Resend** — on an unverified (sandbox) account, Resend only allows sending **to the exact email address you signed up with** (not even a `+alias` variant of it) — a platform restriction, not a bug. Verify a domain to send to arbitrary recipients.
 
 ## Automation Platforms
 
@@ -217,3 +223,4 @@ Unit tests cover the deterministic core (weighted scoring/tiering, webhook paylo
 - Scheduled follow-up sequences (no-reply after N days → follow-up draft)
 - Multi-channel outreach (LinkedIn task creation) and richer enrichment providers
 - Deployment guide (ECS/EC2) mirroring NutriGuide's AWS pipeline
+- Harden pipeline resume when a node *after* the approval gate (e.g. `send`) fails — today the `interrupt()` is already consumed by the first resume, so a transient failure (bad recipient, provider outage) leaves the lead stuck with no way to retry via `approve`/`reject`

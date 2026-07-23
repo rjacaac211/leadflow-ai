@@ -16,8 +16,8 @@ All commands run from the relevant subdirectory (`server/` or `web/`), not the r
 # server
 cd server
 npm install
+npx prisma generate          # required after npm install, and again after any schema.prisma change
 npx prisma migrate deploy    # apply migrations (needs DATABASE_URL)
-npx prisma generate          # regenerate client after schema.prisma changes
 npm run dev                  # tsx watch, port 4000
 npm run typecheck            # tsc --noEmit
 npm test                     # vitest run — all tests, no DB/network/keys needed
@@ -49,10 +49,13 @@ CI (`.github/workflows/ci.yml`) runs, per PR/push to `main`: server `prisma gene
 
 `approvalGateNode` calls `interrupt(...)`, which pauses and checkpoints the graph. `POST /api/leads/:id/approve` (or `/reject`) → `resumeWithDecision()` in `graph.ts` → `graph.invoke(new Command({ resume: decision }), threadConfig)`. `routes/leads.ts` guards this by checking `lead.stage === "AWAITING_APPROVAL"` before resuming (409 otherwise) — the interrupt state itself is the source of truth, but the stage check gives a friendlier error and avoids racing double-approval.
 
+**Known gap (live-tested, not fixed):** if a node *after* `approvalGate` throws — e.g. `sendNode` hitting a Resend/HubSpot error — the interrupt has already been consumed by that resume call, so a second `approve`/`reject` fails with "lead is not awaiting approval" (no pending interrupt left to resume). The lead is stuck mid-graph with no retry path through the current API. Recovering today means deleting the `Lead` row and resubmitting; a real fix would need a "continue without a new resume" path (e.g. `graph.invoke(null, threadConfig)` when `getState` shows no pending interrupt but the graph hasn't reached `END`). Worth fixing before adding any new node after the approval gate, since the same failure mode will repeat.
+
 ### Config, not code, for retargeting the product
 
 - **`icp.config.json`** (repo root, loaded by `server/src/config.ts` via `ICP_CONFIG_PATH` or a path relative to the compiled/`src` location) — product pitch, target customer, weighted rubric criteria, tier thresholds, disqualify cutoff. Changing what the agent qualifies for should mean editing this file, not the prompts in `nodes.ts`.
 - All other config is env vars, read once into the `config` object in `config.ts`. There's no runtime env re-read — changes require a restart.
+- **Use `||`, not `??`, for any optional env var with a non-empty default.** `docker-compose.yml` always injects vars like `OUTREACH_FROM_EMAIL` into the container, even when unset in `.env` — Compose passes an empty string, not `undefined`. `??` only falls back on `null`/`undefined`, so it silently keeps `""` instead of the intended default. This bit `outreachFromEmail` for real (fixed in commit `a1af391`) — Resend rejected sends with `from: ""` as "the domain is invalid" until the fallback operator was changed to `||`. Any new config field with this shape needs the same treatment.
 
 ### Data model (`server/prisma/schema.prisma`)
 
