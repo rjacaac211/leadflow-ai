@@ -195,7 +195,7 @@ export async function draftOutreachNode(
     `You are a sales development rep writing a first outreach email for this product:`,
     icp.productPitch,
     ``,
-    `Write a short, personalized reply-style email to the inbound lead below. Reference something concrete from their message or their company's website so it reads researched, not templated. No pushy language, no placeholder brackets, no markdown — plain text only. Sign off as "The Meridian Team".`,
+    `Write a short, personalized reply-style email to the inbound lead below. Reference something concrete from their message or their company's website so it reads researched, not templated. No pushy language, no placeholder brackets, no markdown — plain text only. Never mention the lead source or any other internal metadata about how the lead arrived. Sign off as "The Meridian Team".`,
     ``,
     `Lead:\n${leadContextBlock(lead)}`,
     ``,
