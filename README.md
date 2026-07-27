@@ -4,15 +4,18 @@ An autonomous lead-generation and qualification agent for B2B sales teams. Inbou
 
 ```
 Lead arrives (form / webhook)
-  → enrich   — scrape the lead's company website for context
+  → enrich   — an agentic tool-calling loop crawls the lead's company site (homepage +
+               a handful of other pages it decides are worth following), bounded by a step
+               budget, a recursion-limit backstop, and a wall-clock timeout
   → qualify  — Claude rates the lead against a configurable ICP rubric;
                a deterministic weighted formula turns ratings into a 0-100 score and hot/warm/cold tier
   → CRM sync — upsert the contact + qualification note into HubSpot
-  → draft    — Claude writes a personalized outreach email
+  → draft    — Claude writes a personalized outreach email, then a critique/revise cycle
+               (pure lint + LLM semantic critique, up to 2 revisions) fixes issues before a human ever sees it
   → approve  — pipeline pauses (durably, in Postgres) until a human approves/edits/rejects in the dashboard or via Slack
   → send     — email goes out via Resend; hot leads ping Slack
-  → replies  — a second agent classifies responses (interested / question / opt-out)
-               and answers, escalates to a human, or unsubscribes accordingly
+  → replies  — a second agent classifies intent (9 classes, using the full reply thread —
+               not just the latest message) and answers, escalates to a human, or unsubscribes accordingly
 ```
 
 This is the business-automation counterpart to [NutriGuide AI](https://github.com/rjacaac211/nutriguide-ai) (a conversational RAG agent): together they cover conversational AI *and* autonomous business-process agents.
@@ -45,14 +48,15 @@ This is the business-automation counterpart to [NutriGuide AI](https://github.co
 
 | Area | What this project demonstrates |
 |------|-------------------------------|
-| **Autonomous AI agents** | LangGraph.js `StateGraph` pipelines that execute a multi-step business task end-to-end with minimal human intervention |
-| **Human-in-the-loop** | LangGraph `interrupt()` + Postgres checkpointer — approval pauses survive restarts and redeploys; humans edit drafts before anything is sent |
+| **Autonomous AI agents** | LangGraph.js `StateGraph` pipelines that execute a multi-step business task end-to-end with minimal human intervention, including a tool-calling sub-agent (`bindTools`/`ToolNode`) that decides which pages to crawl and a bounded self-critique/revise cycle on generated content |
+| **Human-in-the-loop** | LangGraph `interrupt()` + Postgres checkpointer — approval pauses survive restarts and redeploys; humans edit drafts before anything is sent, from the dashboard or Slack |
 | **Lead gen & qualification** | Configurable ICP rubric (`icp.config.json`); LLM rates evidence per criterion, deterministic code computes the weighted score — auditable, not vibes |
 | **CRM integration** | HubSpot contacts + notes via REST (free-tier compatible), idempotent upsert by email |
 | **Messaging platforms** | Outbound email via Resend, hot-lead / handoff notifications via Slack incoming webhooks, interactive Approve/Reject via Slack Block Kit buttons routed through n8n |
-| **Workflow automation tools** | Committed n8n workflow export + optional n8n service in docker-compose; the same webhook works as a Zapier action (documented below) |
-| **Customer inquiry handling** | Reply-handling agent classifies intent and answers product questions, escalates interested leads to a human, honors opt-outs |
+| **Workflow automation tools** | Three committed n8n workflow exports (lead capture with retry/error branching, IMAP inbound replies, Slack interactive approval) + optional n8n service in docker-compose; the same webhook works as a Zapier action (documented below) |
+| **Customer inquiry handling** | Reply-handling agent classifies intent against a 9-class taxonomy using the full prior thread (not just the latest message), answers product questions, escalates high-intent leads to a human, honors opt-outs |
 | **LLM engineering** | Anthropic Claude via `@langchain/anthropic`, zod structured outputs everywhere, per-call token/cost logging, model swappable by env var |
+| **Agent reliability** | Graph-wide `RetryPolicy` for transient failures, a Saga-style compensating error handler on CRM sync (an outage doesn't lose the lead), and checkpoint-based recovery (`POST /:id/retry`) for a lead stuck after a post-approval node failure |
 | **Production practices** | Structured JSON logging (pino), graceful mock mode for every integration, unit-tested pure logic, typecheck + test + build CI, Docker Compose |
 | **Stack** | TypeScript, LangGraph.js, Express, Prisma/PostgreSQL, React + Vite |
 
@@ -61,7 +65,7 @@ This is the business-automation counterpart to [NutriGuide AI](https://github.co
 ```mermaid
 flowchart LR
     subgraph Sources
-        N8N[n8n form / Zapier zap]
+        N8N["n8n: form / IMAP replies /<br/>Slack approval / Zapier zap"]
         FORM[Dashboard demo form]
     end
 
@@ -92,6 +96,8 @@ flowchart LR
     RG --> CL & RS & SL
     API <--> PG
     API -->|approve / reject| IG
+    SL -.->|button click| N8N
+    N8N -.->|approve / reject| API
 ```
 
 Two services:
@@ -104,7 +110,9 @@ Two services:
 - **Deterministic scoring on top of LLM judgment.** The LLM only does what LLMs are good at — reading evidence and rating each rubric criterion 0-5 with a rationale (zod-enforced structured output). The weighted 0-100 score, tier thresholds, and disqualification cutoff are plain unit-tested TypeScript (`server/src/agent/scoring.ts`), so scoring is explainable and tunable without touching a prompt.
 - **The approval gate is a real interrupt, not a status flag.** `interrupt()` checkpoints the graph mid-run into Postgres. `POST /api/leads/:id/approve` resumes it with a `Command({ resume })` carrying the (possibly edited) subject/body. Server restarts between draft and approval are harmless. Approving from Slack's Approve/Reject buttons hits the exact same route (via the n8n workflow below) — there's no separate code path to keep in sync.
 - **Every integration degrades to mock mode.** Missing `HUBSPOT_ACCESS_TOKEN` / `RESEND_API_KEY` / `SLACK_WEBHOOK_URL` turns that step into a logged no-op, so the full pipeline demos with only an Anthropic key. The audit trail records `mock: true` so you always know what really happened.
-- **Failures don't lose leads.** CRM outages are caught, recorded as `crm_sync_failed` events, and the pipeline continues; enrichment is best-effort; webhook capture responds `202` and runs the agent in the background.
+- **Failures don't lose leads.** CRM outages are caught, recorded as `crm_sync_failed` events, and the pipeline continues; enrichment is best-effort; webhook capture responds `202` and runs the agent in the background. Every node also gets a `RetryPolicy` for transient errors (429/5xx/network), and a lead stuck after a post-approval failure (e.g. a Resend outage mid-send) can be recovered with `POST /:id/retry`, which replays from the last checkpoint rather than needing the approval redone.
+- **A drafted email is critiqued before a human ever sees it.** `draftOutreach → critiqueOutreach → (reviseOutreach → critiqueOutreach again, or on to approve)` is a real graph-level cycle, not an in-node loop — the critique combines a deterministic lint (word count, placeholder text, markdown, leaked internal metadata) with one LLM semantic-quality check, bounded to 2 revisions.
+- **Enrichment is agentic, not a single fetch.** A bounded tool-calling loop (step budget + recursion-limit backstop + wall-clock timeout) lets the LLM decide which pages on a lead's site are worth reading — homepage, then pricing/about/product if it judges them useful — falling back to a single-page fetch if the agent fails or times out.
 
 ## Quick Start
 
