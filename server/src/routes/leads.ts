@@ -1,7 +1,12 @@
 import { Router } from "express";
-import { prisma } from "../db.js";
+import { prisma, recordEvent } from "../db.js";
 import { logger } from "../logger.js";
-import { resumeWithDecision } from "../agent/graph.js";
+import { resumeWithDecision, retryFailedStep } from "../agent/graph.js";
+
+// Precondition errors from retryFailedStep are the caller's fault (nothing to
+// retry / a decision is pending instead) — not a real node failure, so they
+// don't get a "retry_failed" audit event of their own.
+const RETRY_PRECONDITION_MESSAGES = ["has a pending approval", "already completed"];
 
 export const leadsRouter = Router();
 
@@ -76,5 +81,31 @@ leadsRouter.post("/:id/reject", async (req, res) => {
   } catch (error) {
     logger.error({ leadId: req.params.id, err: error }, "reject failed");
     res.status(500).json({ error: "failed to resume pipeline" });
+  }
+});
+
+// Recovers a lead stuck mid-graph after a post-approval node (e.g. `send`)
+// failed and exhausted retries. Deliberately does NOT gate on `lead.stage`
+// like approve/reject do — that column can be stale after exactly this kind
+// of failure (see CLAUDE.md); the graph checkpoint is the real source of
+// truth, and retryFailedStep asks it directly.
+leadsRouter.post("/:id/retry", async (req, res) => {
+  const leadId = req.params.id;
+  const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+  if (!lead) {
+    res.status(404).json({ error: "lead not found" });
+    return;
+  }
+  try {
+    const result = await retryFailedStep(leadId);
+    res.status(200).json({ leadId, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "failed to retry pipeline";
+    const isPrecondition = RETRY_PRECONDITION_MESSAGES.some((m) => message.includes(m));
+    if (!isPrecondition) {
+      logger.error({ leadId, err: error }, "retry failed");
+      await recordEvent(leadId, "retry_failed", { error: message });
+    }
+    res.status(isPrecondition ? 409 : 500).json({ error: message });
   }
 });

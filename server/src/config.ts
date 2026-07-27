@@ -34,5 +34,7 @@ export const config = {
   outreachFromEmail:
     process.env.OUTREACH_FROM_EMAIL || "LeadFlow <onboarding@resend.dev>",
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? "",
+  slackBotToken: process.env.SLACK_BOT_TOKEN ?? "",
+  slackApprovalChannel: process.env.SLACK_APPROVAL_CHANNEL ?? "",
   icp: loadIcpConfig(),
 };

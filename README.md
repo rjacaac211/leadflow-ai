@@ -9,7 +9,7 @@ Lead arrives (form / webhook)
                a deterministic weighted formula turns ratings into a 0-100 score and hot/warm/cold tier
   → CRM sync — upsert the contact + qualification note into HubSpot
   → draft    — Claude writes a personalized outreach email
-  → approve  — pipeline pauses (durably, in Postgres) until a human approves/edits/rejects in the dashboard
+  → approve  — pipeline pauses (durably, in Postgres) until a human approves/edits/rejects in the dashboard or via Slack
   → send     — email goes out via Resend; hot leads ping Slack
   → replies  — a second agent classifies responses (interested / question / opt-out)
                and answers, escalates to a human, or unsubscribes accordingly
@@ -49,7 +49,7 @@ This is the business-automation counterpart to [NutriGuide AI](https://github.co
 | **Human-in-the-loop** | LangGraph `interrupt()` + Postgres checkpointer — approval pauses survive restarts and redeploys; humans edit drafts before anything is sent |
 | **Lead gen & qualification** | Configurable ICP rubric (`icp.config.json`); LLM rates evidence per criterion, deterministic code computes the weighted score — auditable, not vibes |
 | **CRM integration** | HubSpot contacts + notes via REST (free-tier compatible), idempotent upsert by email |
-| **Messaging platforms** | Outbound email via Resend, hot-lead / handoff notifications via Slack incoming webhooks |
+| **Messaging platforms** | Outbound email via Resend, hot-lead / handoff notifications via Slack incoming webhooks, interactive Approve/Reject via Slack Block Kit buttons routed through n8n |
 | **Workflow automation tools** | Committed n8n workflow export + optional n8n service in docker-compose; the same webhook works as a Zapier action (documented below) |
 | **Customer inquiry handling** | Reply-handling agent classifies intent and answers product questions, escalates interested leads to a human, honors opt-outs |
 | **LLM engineering** | Anthropic Claude via `@langchain/anthropic`, zod structured outputs everywhere, per-call token/cost logging, model swappable by env var |
@@ -102,7 +102,7 @@ Two services:
 ### Agent design notes
 
 - **Deterministic scoring on top of LLM judgment.** The LLM only does what LLMs are good at — reading evidence and rating each rubric criterion 0-5 with a rationale (zod-enforced structured output). The weighted 0-100 score, tier thresholds, and disqualification cutoff are plain unit-tested TypeScript (`server/src/agent/scoring.ts`), so scoring is explainable and tunable without touching a prompt.
-- **The approval gate is a real interrupt, not a status flag.** `interrupt()` checkpoints the graph mid-run into Postgres. `POST /api/leads/:id/approve` resumes it with a `Command({ resume })` carrying the (possibly edited) subject/body. Server restarts between draft and approval are harmless.
+- **The approval gate is a real interrupt, not a status flag.** `interrupt()` checkpoints the graph mid-run into Postgres. `POST /api/leads/:id/approve` resumes it with a `Command({ resume })` carrying the (possibly edited) subject/body. Server restarts between draft and approval are harmless. Approving from Slack's Approve/Reject buttons hits the exact same route (via the n8n workflow below) — there's no separate code path to keep in sync.
 - **Every integration degrades to mock mode.** Missing `HUBSPOT_ACCESS_TOKEN` / `RESEND_API_KEY` / `SLACK_WEBHOOK_URL` turns that step into a logged no-op, so the full pipeline demos with only an Anthropic key. The audit trail records `mock: true` so you always know what really happened.
 - **Failures don't lose leads.** CRM outages are caught, recorded as `crm_sync_failed` events, and the pipeline continues; enrichment is best-effort; webhook capture responds `202` and runs the agent in the background.
 
@@ -168,6 +168,8 @@ All configuration is environment variables (see [`.env.example`](.env.example)) 
 | `HUBSPOT_ACCESS_TOKEN` | optional | HubSpot account-scoped token; unset = mock mode |
 | `RESEND_API_KEY`, `OUTREACH_FROM_EMAIL` | optional | Outbound email; unset = mock mode |
 | `SLACK_WEBHOOK_URL` | optional | Hot-lead / handoff notifications; unset = mock mode |
+| `SLACK_BOT_TOKEN`, `SLACK_APPROVAL_CHANNEL` | optional | Interactive approval-request message (Block Kit buttons) instead of a plain notification; unset = falls back to `SLACK_WEBHOOK_URL`/mock |
+| `SLACK_SIGNING_SECRET` | optional | Verifies Slack button clicks in the n8n approval workflow are really from Slack; only read by n8n, not the server |
 
 Notes on the optional integrations, from setting each of these up live:
 
@@ -185,6 +187,27 @@ docker compose --profile automation up   # starts n8n on http://localhost:5678
 ```
 
 Import the JSON via n8n → Workflows → Import from File, activate it, and share the form URL (`http://localhost:5678/form/leadflow-capture`, or your host's equivalent). The workflow reads the webhook key from the `LEADFLOW_WEBHOOK_KEY` env var — already wired in `docker-compose.yml`, along with `N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"`, which recent n8n versions require for a node expression to read `$env` at all (without it the HTTP Request node fails with "access to env vars denied" and the form silently drops every submission). Verified live end-to-end: form submission → `POST /api/webhooks/lead` → full qualify/CRM-sync/draft pipeline, landing with `source: "n8n-form"`.
+
+The `Send to LeadFlow` node retries transient failures automatically (up to 3 attempts) and, if the webhook call still fails, routes to an `Alert on Failure` branch instead of silently dropping the submission — a plain POST to `SLACK_WEBHOOK_URL` (mirrored into the n8n container the same way `LEADFLOW_WEBHOOK_KEY` is) naming the lead's email and the error. A duplicate submission (the server's own `200 {"status":"duplicate"}` response) is not treated as a failure, since the server already owns that logic.
+
+### n8n — inbound email replies (demonstrated)
+
+[`automation/n8n-email-reply-workflow.json`](automation/n8n-email-reply-workflow.json) closes the loop on the reply side: an **Email Trigger (IMAP)** node polls a mailbox and forwards each new message to `POST /api/webhooks/email-reply`, so replies can be tested against a real inbox instead of only via the dashboard's simulate-reply control or a manual curl.
+
+Import it the same way as the lead-capture workflow, then attach real IMAP credentials (Settings → Credentials → IMAP) to the trigger node — a disposable test mailbox with app-password IMAP access works fine for a demo. The node's default **Simple** format returns `textPlain`/`textHtml` and a raw `from` header string (e.g. `"Jane Doe <jane@example.com>"`); the HTTP Request node extracts the address out of that string with a regex before posting `{ email, message }`, matching what `/api/webhooks/email-reply` expects. This workflow is optional and additive — the endpoint it calls already works standalone with zero IMAP setup, so there's nothing to configure if you don't need this piece.
+
+### n8n — Slack interactive approval (needs a Slack App)
+
+[`automation/n8n-slack-approval-workflow.json`](automation/n8n-slack-approval-workflow.json) lets a human approve or reject a drafted outreach email with one click from Slack instead of opening the dashboard. `approvalGateNode` posts a Block Kit message (via `notifySlackWithApproval` in `server/src/integrations/slack.ts`) with **Approve**/**Reject** buttons carrying the lead ID; clicking one sends Slack's interaction payload to this workflow, which verifies it really came from Slack, then calls the same unmodified `/api/leads/:id/approve|reject` routes the dashboard uses — there's exactly one code path that resumes the graph, Slack is just another caller of it.
+
+Setup requires a real Slack App (Slack signs every interaction payload with a per-app secret, so there's no way to demo the *interactive* part without one — a curl-simulated payload can't stand in for it the way it does for the other two workflows):
+
+1. Create an app at [api.slack.com/apps](https://api.slack.com/apps), add the `chat:write` bot scope, install it to your workspace, and grab the **Bot User OAuth Token** (`xoxb-...`).
+2. Under **Interactivity & Shortcuts**, turn it on and set the Request URL to `http://<your-n8n-host>:5678/webhook/leadflow-slack-approval` (needs a public URL — `ngrok http 5678` or similar for local testing).
+3. Copy the **Signing Secret** from the app's Basic Information page.
+4. Set `SLACK_BOT_TOKEN`, `SLACK_APPROVAL_CHANNEL` (for the server) and `SLACK_SIGNING_SECRET` (for n8n) in `.env`, then import and activate the workflow the same way as the others.
+
+The workflow's signature check (`Verify & Parse Slack Interaction`, a Code node — `NODE_FUNCTION_ALLOW_BUILTIN: crypto` is already wired into the n8n service for it) recomputes Slack's `v0=` HMAC over the raw request body and does a constant-time compare, rejecting anything with a bad or stale (>5 min old) signature with `401` before it can reach `/approve`. **Verified against a synthetic-but-correctly-signed payload** (same HMAC algorithm, a throwaway local secret) rather than a live Slack workspace: crafted requests with valid signatures were routed through to `/approve` and `/reject` and correctly resumed a paused lead's graph end-to-end (rejecting flipped the stage back to `QUALIFIED` and recorded `outreach_rejected`; approving reached the `send` node and only failed on Resend's sandbox recipient restriction, the same known limitation noted above — not a workflow bug), and a bad signature was correctly rejected with `401`. The one piece this can't stand in for is Slack's own request signing and the actual button-click UX, which needs the real app from the steps above.
 
 ### Zapier (compatible)
 
@@ -206,6 +229,7 @@ Field names are forgiving — the payload normalizer accepts common variants (`f
 | `GET /api/leads/:id` | — | Lead + full event timeline + messages |
 | `POST /api/leads/:id/approve` | — | Resume a paused pipeline; optional `{subject, body}` overrides |
 | `POST /api/leads/:id/reject` | — | Resume with rejection; optional `{reason}` |
+| `POST /api/leads/:id/retry` | — | Recover a lead stuck after a post-approval node failure (e.g. `send`); replays from the last checkpoint |
 | `GET /health` | — | Liveness + DB check |
 
 The dashboard API is unauthenticated by design for the local demo — put it behind your reverse proxy's auth (or a VPN) before exposing it.
@@ -213,11 +237,11 @@ The dashboard API is unauthenticated by design for the local demo — put it beh
 ## Testing & CI
 
 ```bash
-cd server && npm run typecheck && npm test   # vitest — 17 unit tests on pure logic
+cd server && npm run typecheck && npm test   # vitest — 58 unit tests on pure logic
 cd web && npm run build
 ```
 
-Unit tests cover the deterministic core (weighted scoring/tiering, webhook payload normalization, HTML-to-text extraction) and need no database, network, or API keys. GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck + tests + web build on every PR and push to `main`.
+Unit tests cover the deterministic core (weighted scoring/tiering, webhook payload normalization, HTML-to-text extraction, link ranking, outreach draft linting, retriable-error classification, reply-thread transcript building) and need no database, network, or API keys. GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck + tests + web build on every PR and push to `main`.
 
 ## Project Structure
 
@@ -225,18 +249,24 @@ Unit tests cover the deterministic core (weighted scoring/tiering, webhook paylo
 ├── icp.config.json              # the qualification rubric — edit to retarget the agent
 ├── docker-compose.yml           # postgres + server + web (+ optional n8n)
 ├── automation/
-│   └── n8n-lead-capture-workflow.json
+│   ├── n8n-lead-capture-workflow.json
+│   ├── n8n-email-reply-workflow.json
+│   └── n8n-slack-approval-workflow.json
 ├── server/
 │   ├── prisma/schema.prisma     # Lead, LeadEvent (audit trail), OutreachMessage
 │   └── src/
 │       ├── agent/
-│       │   ├── graph.ts         # StateGraphs, Postgres checkpointer, run/resume API
-│       │   ├── nodes.ts         # enrich → qualify → crmSync → draft → approve → send; reply pipeline
-│       │   ├── scoring.ts       # pure weighted scoring + tiering (unit tested)
-│       │   ├── llm.ts           # Claude factory + token/cost logging
-│       │   └── state.ts         # graph state annotations
+│       │   ├── graph.ts             # StateGraphs, RetryPolicy/errorHandler wiring, Postgres checkpointer, run/resume/retry API
+│       │   ├── nodes.ts             # enrich → qualify → crmSync → draft → critique/revise → approve → send; reply pipeline
+│       │   ├── enrichment-agent.ts  # bounded tool-calling agent that crawls a lead's site (fetch_page tool)
+│       │   ├── outreach-critique.ts # pure draft lint + revision termination condition (unit tested)
+│       │   ├── reply-context.ts     # builds prior-thread transcript for reply classification/drafting (unit tested)
+│       │   ├── errors.ts            # retriable-error classification for RetryPolicy (unit tested)
+│       │   ├── scoring.ts           # pure weighted scoring + tiering (unit tested)
+│       │   ├── llm.ts               # Claude factory + token/cost logging
+│       │   └── state.ts             # graph state annotations
 │       ├── integrations/        # hubspot, resend, slack, enrichment — all with mock mode
-│       ├── routes/              # webhooks, leads (approve/reject resume)
+│       ├── routes/              # webhooks, leads (approve/reject/retry resume)
 │       └── services/leads.ts    # webhook payload normalization (unit tested)
 └── web/                         # React dashboard: pipeline, timeline, approval queue
 ```
@@ -247,4 +277,3 @@ Unit tests cover the deterministic core (weighted scoring/tiering, webhook paylo
 - Scheduled follow-up sequences (no-reply after N days → follow-up draft)
 - Multi-channel outreach (LinkedIn task creation) and richer enrichment providers
 - Deployment guide (ECS/EC2) mirroring NutriGuide's AWS pipeline
-- Harden pipeline resume when a node *after* the approval gate (e.g. `send`) fails — today the `interrupt()` is already consumed by the first resume, so a transient failure (bad recipient, provider outage) leaves the lead stuck with no way to retry via `approve`/`reject`

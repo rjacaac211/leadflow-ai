@@ -1,4 +1,4 @@
-import { interrupt } from "@langchain/langgraph";
+import { END, interrupt } from "@langchain/langgraph";
 import type { AIMessage } from "@langchain/core/messages";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -7,10 +7,13 @@ import { prisma, recordEvent } from "../db.js";
 import { fetchWebsiteText } from "../integrations/enrichment.js";
 import { syncLeadToCrm } from "../integrations/hubspot.js";
 import { sendEmail } from "../integrations/resend.js";
-import { notifySlack } from "../integrations/slack.js";
+import { notifySlack, notifySlackWithApproval } from "../integrations/slack.js";
+import { runEnrichmentAgent } from "./enrichment-agent.js";
 import { createModel, logTokenUsage } from "./llm.js";
+import { lintOutreachDraft } from "./outreach-critique.js";
+import { buildThreadTranscript } from "./reply-context.js";
 import { computeLeadScore, scoreToTier } from "./scoring.js";
-import type { ApprovalDecision, IntakeStateType, ReplyStateType } from "./state.js";
+import type { ApprovalDecision, IntakeStateType, ReplyIntent, ReplyStateType } from "./state.js";
 
 async function loadLead(leadId: string) {
   const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
@@ -50,7 +53,38 @@ export async function enrichNode(
     return { enrichment: null };
   }
 
-  const text = await fetchWebsiteText(lead.companyWebsite);
+  await recordEvent(lead.id, "enrichment_agent_started", { url: lead.companyWebsite });
+  let text: string | null = null;
+  let pagesVisited = 0;
+  try {
+    const agentResult = await runEnrichmentAgent(lead.companyWebsite);
+    if (agentResult) {
+      text = agentResult.text;
+      pagesVisited = agentResult.pagesVisited;
+      await recordEvent(lead.id, "enrichment_agent_finished", {
+        url: lead.companyWebsite,
+        pagesVisited,
+        chars: text.length,
+      });
+    }
+  } catch (error) {
+    logger.warn(
+      { leadId: lead.id, err: error },
+      "enrichment agent failed — falling back to single-page fetch",
+    );
+    await recordEvent(lead.id, "enrichment_agent_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Fall back to the single-fetch path if the agent found nothing usable —
+  // the same "degrade, don't drop the lead" pattern every other integration
+  // in this repo follows, not a missing-credential case (there's no new key
+  // here), but the same spirit.
+  if (!text) {
+    text = await fetchWebsiteText(lead.companyWebsite);
+  }
+
   if (!text) {
     await recordEvent(lead.id, "enrichment_failed", { url: lead.companyWebsite });
     return { enrichment: null };
@@ -63,6 +97,7 @@ export async function enrichNode(
   await recordEvent(lead.id, "enriched", {
     url: lead.companyWebsite,
     chars: text.length,
+    viaAgent: pagesVisited > 0,
   });
   return { enrichment: text };
 }
@@ -144,37 +179,40 @@ export async function qualifyNode(
   return { score, tier, qualified, qualificationReason: summary };
 }
 
+// Where the graph goes after a successful (or compensated) crmSync — shared
+// by the normal conditional edge and the crmSync errorHandler so both stay
+// in sync with the same qualified/disqualified branching rule.
+export function nextAfterCrmSync(qualified: boolean): "draftOutreach" | typeof END {
+  return qualified ? "draftOutreach" : END;
+}
+
 export async function crmSyncNode(
   state: IntakeStateType,
 ): Promise<Partial<IntakeStateType>> {
   const lead = await loadLead(state.leadId);
-  try {
-    const result = await syncLeadToCrm({
-      email: lead.email,
-      name: lead.name,
-      company: lead.company ?? undefined,
-      website: lead.companyWebsite ?? undefined,
-      score: state.score,
-      tier: state.tier,
-      qualificationReason: state.qualificationReason,
-    });
-    if (result.contactId) {
-      await prisma.lead.update({
-        where: { id: lead.id },
-        data: { hubspotContactId: result.contactId },
-      });
-    }
-    await recordEvent(lead.id, "crm_synced", {
-      mock: result.mock,
-      contactId: result.contactId,
-    });
-  } catch (error) {
-    // CRM being down should not lose the lead or halt outreach.
-    logger.error({ leadId: lead.id, err: error }, "crm sync failed");
-    await recordEvent(lead.id, "crm_sync_failed", {
-      error: error instanceof Error ? error.message : String(error),
+  // Let a real failure propagate so RetryPolicy can retry transient errors;
+  // the errorHandler registered on this node in graph.ts is what enforces
+  // "a CRM outage must not lose the lead or block outreach" once retries
+  // are exhausted, instead of swallowing the error on the very first try.
+  const result = await syncLeadToCrm({
+    email: lead.email,
+    name: lead.name,
+    company: lead.company ?? undefined,
+    website: lead.companyWebsite ?? undefined,
+    score: state.score,
+    tier: state.tier,
+    qualificationReason: state.qualificationReason,
+  });
+  if (result.contactId) {
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: { hubspotContactId: result.contactId },
     });
   }
+  await recordEvent(lead.id, "crm_synced", {
+    mock: result.mock,
+    contactId: result.contactId,
+  });
   return {};
 }
 
@@ -221,21 +259,143 @@ export async function draftOutreachNode(
       body,
     },
   });
-  await prisma.lead.update({
-    where: { id: lead.id },
-    data: { stage: "AWAITING_APPROVAL" },
-  });
   await recordEvent(lead.id, "outreach_drafted", { messageId: draft.id, subject });
 
-  return { draftMessageId: draft.id, draftSubject: subject, draftBody: body };
+  // lead.stage moves to AWAITING_APPROVAL in approvalGateNode, once the
+  // critique/revise cycle below has actually finished and we're about to
+  // pause for a human — not here, since a draft can still go through
+  // several silent revisions before a human ever sees it.
+  return {
+    draftMessageId: draft.id,
+    draftSubject: subject,
+    draftBody: body,
+    revisionCount: 0,
+  };
+}
+
+export const MAX_OUTREACH_REVISIONS = 2;
+
+export async function critiqueOutreachNode(
+  state: IntakeStateType,
+): Promise<Partial<IntakeStateType>> {
+  const lintIssues = lintOutreachDraft(state.draftSubject, state.draftBody);
+
+  const critiqueSchema = z.object({
+    passes: z.boolean().describe("True only if the draft needs no changes"),
+    issues: z
+      .array(z.string())
+      .describe("Specific problems found; empty if the draft passes"),
+  });
+
+  const prompt = [
+    `You are reviewing a sales outreach email draft before it goes to a human for approval.`,
+    ``,
+    `Check for: genuine personalization (references something real and specific about the lead or their company, not generic filler), appropriate tone (not pushy, no invented commitments or pricing), and that it reads like it was actually written for this lead rather than a template.`,
+    ``,
+    `Subject: ${state.draftSubject}`,
+    `Body:\n${state.draftBody}`,
+  ].join("\n");
+
+  const model = createModel(512).withStructuredOutput(critiqueSchema, {
+    name: "critique_outreach",
+    includeRaw: true,
+  });
+  const result = await model.invoke(prompt);
+  logTokenUsage("critique_outreach", result.raw as AIMessage);
+
+  const semanticIssues = result.parsed.passes ? [] : result.parsed.issues;
+  const issues = [...lintIssues, ...semanticIssues];
+  const passes = lintIssues.length === 0 && result.parsed.passes;
+
+  await recordEvent(state.leadId, "outreach_critiqued", {
+    passes,
+    issues,
+    revisionCount: state.revisionCount,
+  });
+
+  return { critiquePassed: passes, critiqueIssues: issues };
+}
+
+export async function reviseOutreachNode(
+  state: IntakeStateType,
+): Promise<Partial<IntakeStateType>> {
+  const lead = await loadLead(state.leadId);
+  const { icp } = config;
+
+  const draftSchema = z.object({
+    subject: z.string().describe("Email subject line, under 80 characters"),
+    body: z
+      .string()
+      .describe("Plain-text email body, 90-140 words, ending with a soft call to action"),
+  });
+
+  const prompt = [
+    `You previously drafted this sales outreach email for the product below, but a review pass found issues. Revise it to fix every issue listed while keeping what already works. No pushy language, no placeholder brackets, no markdown — plain text only. Never mention the lead source or any other internal metadata about how the lead arrived. Sign off as "The Meridian Team".`,
+    icp.productPitch,
+    ``,
+    `Previous subject: ${state.draftSubject}`,
+    `Previous body:\n${state.draftBody}`,
+    ``,
+    `Issues to fix:\n- ${state.critiqueIssues.join("\n- ")}`,
+    ``,
+    `Lead:\n${leadContextBlock(lead)}`,
+    ``,
+    `Company website text (may be empty):\n${(state.enrichment ?? "").slice(0, 3000)}`,
+  ].join("\n");
+
+  const model = createModel(1024).withStructuredOutput(draftSchema, {
+    name: "revise_email",
+    includeRaw: true,
+  });
+  const result = await model.invoke(prompt);
+  logTokenUsage("revise_outreach", result.raw as AIMessage);
+  const { subject, body } = result.parsed;
+
+  const revisionCount = state.revisionCount + 1;
+  if (state.draftMessageId) {
+    await prisma.outreachMessage.update({
+      where: { id: state.draftMessageId },
+      data: { subject, body },
+    });
+  }
+  await recordEvent(state.leadId, "outreach_revised", { revisionCount });
+
+  return { draftSubject: subject, draftBody: body, revisionCount };
 }
 
 export async function approvalGateNode(
   state: IntakeStateType,
 ): Promise<Partial<IntakeStateType>> {
+  // Idempotent — re-run on every resume along with the rest of this node
+  // (interrupt() only skips re-pausing, not the code around it), so this
+  // just re-writes the same value on resume rather than double-transitioning.
+  await prisma.lead.update({
+    where: { id: state.leadId },
+    data: { stage: "AWAITING_APPROVAL" },
+  });
+
+  // The rest of this node (everything before interrupt()) re-runs on every
+  // resume too, so a Slack post here needs its own guard — recordEvent isn't
+  // idempotent the way the lead.stage write above is. Only fire once per
+  // pause, tracked via the same audit trail every other decision point uses.
+  const alreadyNotified = await prisma.leadEvent.findFirst({
+    where: { leadId: state.leadId, type: "slack_approval_requested" },
+  });
+  if (!alreadyNotified) {
+    const result = await notifySlackWithApproval(
+      state.leadId,
+      state.draftSubject,
+      state.draftBody,
+    );
+    await recordEvent(state.leadId, "slack_approval_requested", { mock: result.mock });
+  }
+
   // Pauses the graph (durably, via the Postgres checkpointer) until a human
-  // approves or rejects the draft from the dashboard. The resume value comes
-  // from POST /api/leads/:id/approve|reject as a Command({ resume }).
+  // approves or rejects the draft from the dashboard (or via the Slack
+  // approval buttons, which route through the same /approve|/reject routes
+  // by way of the n8n workflow in automation/n8n-slack-approval-workflow.json).
+  // The resume value comes from POST /api/leads/:id/approve|reject as a
+  // Command({ resume }).
   const decision = interrupt<
     { type: string; leadId: string; subject: string; body: string },
     ApprovalDecision
@@ -316,6 +476,31 @@ export async function sendNode(
 // Reply pipeline nodes
 // ---------------------------------------------------------------------------
 
+// Intents that get an automated reply drafted and sent. The remainder
+// (opt_out, wrong_person, other) are terminal or human-handoff cases with no
+// automated response — see handleReplyNode.
+const AUTO_REPLY_INTENTS = new Set<ReplyIntent>([
+  "interested",
+  "meeting_request",
+  "pricing_question",
+  "product_question",
+  "objection",
+  "referral",
+]);
+
+// Higher-urgency intents that page a human immediately via Slack and move
+// the lead straight to ESCALATED instead of just REPLIED.
+const ESCALATE_INTENTS = new Set<ReplyIntent>(["interested", "meeting_request"]);
+
+const INTENT_INSTRUCTIONS: Record<Exclude<ReplyIntent, "opt_out" | "wrong_person" | "other">, string> = {
+  interested: `The lead expressed general interest. Write a warm reply confirming a teammate will reach out shortly to schedule time, and ask for their availability this week. Do not invent pricing or commitments.`,
+  meeting_request: `The lead wants to schedule a call or demo. Confirm enthusiasm and ask for their availability this week; do not commit to a specific time yourself, since a teammate will coordinate scheduling.`,
+  pricing_question: `The lead is asking about pricing. Do not invent numbers or commitments — explain that a teammate will follow up with pricing details tailored to their team, and ask a brief qualifying question (e.g. team size) if it's useful.`,
+  product_question: `The lead asked a question about the product. Answer it briefly and accurately using only the product description below; if the answer isn't covered there, say a teammate will follow up with details rather than guessing.`,
+  objection: `The lead raised a concern or hesitation. Acknowledge it directly and briefly without being defensive or dismissive, and offer that a teammate can address it in more depth. Do not argue or over-promise.`,
+  referral: `The lead is pointing to someone else as a better contact rather than evaluating this themselves. Thank them briefly and ask for the best way to reach the person they mentioned, or offer to have a teammate follow up with that contact directly.`,
+};
+
 export async function classifyReplyNode(
   state: ReplyStateType,
 ): Promise<Partial<ReplyStateType>> {
@@ -330,11 +515,26 @@ export async function classifyReplyNode(
     },
   });
 
+  const thread = await prisma.outreachMessage.findMany({
+    where: { leadId: lead.id },
+    orderBy: { createdAt: "asc" },
+  });
+
   const intentSchema = z.object({
     intent: z
-      .enum(["interested", "question", "opt_out", "other"])
+      .enum([
+        "interested",
+        "meeting_request",
+        "pricing_question",
+        "product_question",
+        "objection",
+        "referral",
+        "opt_out",
+        "wrong_person",
+        "other",
+      ])
       .describe(
-        "interested = wants a call/demo/pricing; question = asks something answerable about the product; opt_out = asks to stop contact; other = anything else",
+        "interested = general positive interest with no specific ask; meeting_request = explicitly wants a call/demo/meeting; pricing_question = asks about cost or plans; product_question = asks something else answerable about the product; objection = raises a concern, hesitation, or pushback; referral = points to a different person to contact instead of themselves; opt_out = asks to stop contact; wrong_person = says they are not the right contact and names no replacement; other = anything else",
       ),
     reasoning: z.string().describe("One sentence explaining the classification"),
   });
@@ -345,10 +545,11 @@ export async function classifyReplyNode(
   });
   const result = await model.invoke(
     [
-      `Classify the intent of this email reply from a sales lead.`,
+      `Classify the intent of this email reply from a sales lead. Use the full conversation for context, but base the classification on their latest message.`,
       ``,
       `Lead: ${lead.name} (${lead.company ?? "unknown company"})`,
-      `Their reply:\n${state.replyText}`,
+      ``,
+      `Conversation so far:\n${buildThreadTranscript(thread)}`,
     ].join("\n"),
   );
   logTokenUsage("classify_reply", result.raw as AIMessage);
@@ -372,21 +573,22 @@ export async function handleReplyNode(
     return { responseBody: null };
   }
 
-  if (state.intent === "other") {
+  if (!AUTO_REPLY_INTENTS.has(state.intent)) {
+    // wrong_person / other: flag for human follow-up, no automated reply.
     await prisma.lead.update({ where: { id: lead.id }, data: { stage: "REPLIED" } });
     return { responseBody: null };
   }
+
+  const thread = await prisma.outreachMessage.findMany({
+    where: { leadId: lead.id },
+    orderBy: { createdAt: "asc" },
+  });
 
   const responseSchema = z.object({
     body: z
       .string()
       .describe("Plain-text email reply, under 120 words, signed 'The Meridian Team'"),
   });
-
-  const instruction =
-    state.intent === "interested"
-      ? `The lead is interested. Write a warm reply confirming a teammate will reach out shortly to schedule time, and ask for their availability this week. Do not invent pricing or commitments.`
-      : `The lead asked a question. Answer it briefly and accurately using only the product description below; if the answer isn't covered there, say a teammate will follow up with details rather than guessing.`;
 
   const model = createModel(1024).withStructuredOutput(responseSchema, {
     name: "draft_reply",
@@ -398,10 +600,11 @@ export async function handleReplyNode(
       ``,
       `Product description: ${icp.productPitch}`,
       ``,
-      instruction,
+      INTENT_INSTRUCTIONS[state.intent as keyof typeof INTENT_INSTRUCTIONS],
       ``,
       `Lead: ${lead.name} (${lead.company ?? "unknown company"})`,
-      `Their message:\n${state.replyText}`,
+      ``,
+      `Conversation so far:\n${buildThreadTranscript(thread)}`,
     ].join("\n"),
   );
   logTokenUsage("handle_reply", result.raw as AIMessage);
@@ -422,16 +625,16 @@ export async function handleReplyNode(
     },
   });
 
-  const newStage = state.intent === "interested" ? "ESCALATED" : "REPLIED";
+  const newStage = ESCALATE_INTENTS.has(state.intent) ? "ESCALATED" : "REPLIED";
   await prisma.lead.update({ where: { id: lead.id }, data: { stage: newStage } });
   await recordEvent(lead.id, "reply_handled", {
     intent: state.intent,
     mock: sendResult.mock,
   });
 
-  if (state.intent === "interested") {
+  if (ESCALATE_INTENTS.has(state.intent)) {
     await notifySlack(
-      `:speech_balloon: *${lead.name}* (${lead.email}) replied and is interested — handed off for human follow-up.`,
+      `:speech_balloon: *${lead.name}* (${lead.email}) replied (${state.intent}) — handed off for human follow-up.`,
     );
   }
   return { responseBody };

@@ -46,12 +46,38 @@
       "name": "Send to LeadFlow",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [220, 0]
+      "position": [220, 0],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: ':warning: LeadFlow capture failed for ' + ($('Lead Capture Form').item.json.email || 'unknown email') + ' — ' + ($json.error || 'unknown error') }) }}",
+        "options": {}
+      },
+      "id": "9a1f6b1e-0000-4000-8000-000000000003",
+      "name": "Alert on Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 140],
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
     "Lead Capture Form": {
       "main": [[{ "node": "Send to LeadFlow", "type": "main", "index": 0 }]]
+    },
+    "Send to LeadFlow": {
+      "main": [
+        [],
+        [{ "node": "Alert on Failure", "type": "main", "index": 0 }]
+      ]
     }
   },
   "settings": { "executionOrder": "v1" },
