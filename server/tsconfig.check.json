@@ -1,0 +1,12 @@
+{
+  // Typecheck-only config covering everything, including tests/ and evals/,
+  // which the build config deliberately excludes (they never ship to dist/).
+  // `npm run typecheck` points here; `npm run build` still uses tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "evals/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,21 @@
+{
+  "$comment": [
+    "Pass bar for `npm run eval`. Committed as data so tightening it is a",
+    "reviewable diff rather than an argument. disqualifyRecall is the strictest",
+    "number on purpose: rating a competitor or a job applicant as a real lead",
+    "wastes a rep's time and, worse, can send them an email.",
+    "",
+    "Observed baseline (gpt-5.4, --repeat 3): tier 97.8%, qualified 100%,",
+    "disqualify recall 100%, MAE 0.04. Gates sit below that with headroom for",
+    "run-to-run variance (scores move a few points between identical runs) and",
+    "for swapping models — a weaker model should fail this, that's the point.",
+    "",
+    "Caveat on maxScoreMae: scoreRange bands span most of their tier, so MAE is",
+    "a coarse calibration check, not a tight one. Tier accuracy and disqualify",
+    "recall are the metrics that actually bite."
+  ],
+  "tierAccuracy": 0.85,
+  "qualifiedAccuracy": 0.9,
+  "disqualifyRecall": 0.9,
+  "maxScoreMae": 3
+}

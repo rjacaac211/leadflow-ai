@@ -1,0 +1,62 @@
+name: Eval
+
+# Deliberately separate from ci.yml. The main CI must stay secret-free and fast
+# so it runs on forks and every push; this one spends real Anthropic tokens, so
+# it's manual plus a weekly regression check.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Runs per case (higher = better variance signal, more cost)"
+        required: false
+        default: "3"
+  schedule:
+    # Mondays 06:00 UTC — catches model-side drift between code changes.
+    - cron: "0 6 * * 1"
+
+jobs:
+  qualification-eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # Exit cleanly rather than red-X when the secret isn't configured (forks,
+      # or a clone of this repo by someone who hasn't added a key).
+      - name: Check for ANTHROPIC_API_KEY
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is not set — skipping the eval."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.key.outputs.present == 'true'
+        run: npm ci
+
+      # No prisma generate, no database: the eval imports none of that on
+      # purpose (see evals/run-qualification-eval.ts).
+      - if: steps.key.outputs.present == 'true'
+        name: Run qualification eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run eval -- --repeat ${{ github.event.inputs.repeat || '3' }}
+
+      # always() so a threshold failure still uploads the report explaining why.
+      - if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: server/evals/report.json
+          if-no-files-found: warn

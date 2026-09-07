@@ -4,18 +4,20 @@
   "criteria": [
     {
       "name": "industry_fit",
-      "description": "The lead's company operates in B2B software, technology services, or another industry with a structured sales pipeline.",
-      "weight": 3
+      "description": "The lead's company operates in B2B software, technology services, or another industry with a structured sales pipeline. Score 0 ONLY with positive evidence the company is not such a business (consumer retail, a nonprofit, a school, or anything with no sales function). If you simply have no evidence either way, score 2 — absent information is not disqualifying.",
+      "weight": 3,
+      "disqualifyAtOrBelow": 0
     },
     {
       "name": "buyer_role",
       "description": "The contact appears to hold a revenue, operations, or leadership role with influence over sales tooling decisions.",
-      "weight": 3
+      "weight": 4
     },
     {
       "name": "pain_signal",
-      "description": "The lead's message or company context signals a concrete pain the product solves (manual reporting, forecasting gaps, scaling sales ops).",
-      "weight": 4
+      "description": "The lead's message or company context signals a concrete pain the product solves (manual reporting, forecasting gaps, scaling sales ops). Score 0 when the enquiry is not a buying enquiry at all — a competitor benchmarking, a vendor pitching services, or an academic request.",
+      "weight": 4,
+      "disqualifyAtOrBelow": 0
     },
     {
       "name": "company_size_fit",
@@ -25,9 +27,9 @@
     {
       "name": "urgency",
       "description": "The lead expresses timeline or intent to evaluate solutions soon.",
-      "weight": 2
+      "weight": 4
     }
   ],
-  "tierThresholds": { "hot": 70, "warm": 40 },
+  "tierThresholds": { "hot": 80, "warm": 40 },
   "disqualifyBelow": 25
 }

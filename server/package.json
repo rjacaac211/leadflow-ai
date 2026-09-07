@@ -9,8 +9,9 @@
     "dev": "tsx watch src/index.ts",
     "migrate": "prisma migrate",
     "generate": "prisma generate",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run",
+    "eval": "tsx evals/run-qualification-eval.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^1.5.2",

@@ -11,31 +11,14 @@ import { notifySlack, notifySlackWithApproval } from "../integrations/slack.js";
 import { runEnrichmentAgent } from "./enrichment-agent.js";
 import { createModel, logTokenUsage } from "./llm.js";
 import { lintOutreachDraft } from "./outreach-critique.js";
+import { buildQualifyPrompt, buildRatingSchema, leadContextBlock } from "./qualify-prompt.js";
 import { buildThreadTranscript } from "./reply-context.js";
-import { computeLeadScore, scoreToTier } from "./scoring.js";
+import { qualifyFromRatings } from "./scoring.js";
 import type { ApprovalDecision, IntakeStateType, ReplyIntent, ReplyStateType } from "./state.js";
 
 async function loadLead(leadId: string) {
   const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
   return lead;
-}
-
-function leadContextBlock(lead: {
-  name: string;
-  email: string;
-  company: string | null;
-  companyWebsite: string | null;
-  message: string | null;
-  source: string;
-}): string {
-  return [
-    `Name: ${lead.name}`,
-    `Email: ${lead.email}`,
-    `Company: ${lead.company ?? "(not provided)"}`,
-    `Website: ${lead.companyWebsite ?? "(not provided)"}`,
-    `Source: ${lead.source}`,
-    `Message from the lead:\n${lead.message ?? "(none)"}`,
-  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -107,46 +90,12 @@ export async function qualifyNode(
 ): Promise<Partial<IntakeStateType>> {
   const lead = await loadLead(state.leadId);
   const { icp } = config;
-  const criterionNames = icp.criteria.map((c) => c.name) as [string, ...string[]];
 
-  const ratingSchema = z.object({
-    ratings: z
-      .array(
-        z.object({
-          name: z.enum(criterionNames).describe("The ICP criterion being rated"),
-          score: z
-            .number()
-            .int()
-            .min(0)
-            .max(5)
-            .describe("0 = no fit or no evidence, 5 = strong fit"),
-          rationale: z.string().describe("One or two sentences of evidence"),
-        }),
-      )
-      .describe("Exactly one rating per ICP criterion"),
-    summary: z
-      .string()
-      .describe("Two or three sentences summarizing overall fit for a sales rep"),
-  });
-
-  const rubric = icp.criteria
-    .map((c) => `- ${c.name} (weight ${c.weight}): ${c.description}`)
-    .join("\n");
-
-  const prompt = [
-    `You are a lead-qualification analyst for the following product:`,
-    icp.productPitch,
-    ``,
-    `Ideal customer profile: ${icp.targetCustomer}`,
-    ``,
-    `Rate this inbound lead against each rubric criterion. Base every rating on evidence from the lead's submission and company website text; when there is no evidence for a criterion, score it low rather than guessing.`,
-    ``,
-    `Rubric:\n${rubric}`,
-    ``,
-    `Lead:\n${leadContextBlock(lead)}`,
-    ``,
-    `Company website text (may be empty):\n${state.enrichment ?? "(no enrichment available)"}`,
-  ].join("\n");
+  // Prompt and schema live in qualify-prompt.ts so the offline eval harness
+  // (server/evals) can score fixture leads through the exact same prompt this
+  // node uses, without pulling in Prisma.
+  const ratingSchema = buildRatingSchema(icp.criteria);
+  const prompt = buildQualifyPrompt({ lead, icp, enrichment: state.enrichment ?? null });
 
   const model = createModel(2048).withStructuredOutput(ratingSchema, {
     name: "rate_lead",
@@ -156,9 +105,7 @@ export async function qualifyNode(
   logTokenUsage("qualify", result.raw as AIMessage, lead.id);
   const { ratings, summary } = result.parsed;
 
-  const score = computeLeadScore(icp.criteria, ratings);
-  const tier = scoreToTier(score, icp.tierThresholds);
-  const qualified = score >= icp.disqualifyBelow;
+  const { score, tier, qualified, disqualifiedBy } = qualifyFromRatings(icp, ratings);
 
   await prisma.lead.update({
     where: { id: lead.id },
@@ -173,8 +120,12 @@ export async function qualifyNode(
     score,
     tier,
     ratings,
+    // Non-null means a criterion veto rejected the lead despite its score —
+    // without this the audit trail would show a passing score and an
+    // inexplicable DISQUALIFIED stage.
+    disqualifiedBy,
   });
-  logger.info({ leadId: lead.id, score, tier, qualified }, "lead qualified");
+  logger.info({ leadId: lead.id, score, tier, qualified, disqualifiedBy }, "lead qualified");
 
   return { score, tier, qualified, qualificationReason: summary };
 }

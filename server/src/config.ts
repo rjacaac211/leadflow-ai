@@ -7,6 +7,16 @@ export interface IcpCriterion {
   name: string;
   description: string;
   weight: number;
+  /**
+   * Optional veto. When the LLM rates this criterion at or below this value,
+   * the lead is disqualified outright regardless of its weighted score.
+   *
+   * Exists because a weighted average dilutes a decisive negative: the offline
+   * eval caught a competitor rated `pain_signal: 0` still scoring 36/100 —
+   * above the disqualify cutoff — on the strength of its industry and size.
+   * Omit to leave a criterion non-gating.
+   */
+  disqualifyAtOrBelow?: number;
 }
 
 export interface IcpConfig {
