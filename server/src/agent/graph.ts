@@ -22,6 +22,7 @@ import {
   sendNode,
 } from "./nodes.js";
 import { shouldRevise } from "./outreach-critique.js";
+import { drainUsage } from "./usage.js";
 
 // Applied to every node via setNodeDefaults below. interrupt() (used by
 // approvalGate) bypasses retry entirely regardless of this default, so it's
@@ -133,6 +134,22 @@ function threadConfig(leadId: string) {
 
 export type IntakeRunResult = { status: "completed" | "awaiting_approval" };
 
+/**
+ * Flush whatever LLM spend this run accumulated into the audit trail. Runs in
+ * a `finally` so a failed pipeline still records what it burned before dying —
+ * a run that costs money and then throws is exactly the one worth costing out.
+ * Best-effort: a failure to record usage must never mask the real error.
+ */
+async function recordUsage(leadId: string): Promise<void> {
+  const usage = drainUsage(leadId);
+  if (!usage) return;
+  try {
+    await recordEvent(leadId, "llm_usage", { ...usage });
+  } catch (error) {
+    logger.warn({ leadId, err: error }, "failed to record llm usage event");
+  }
+}
+
 function requireIntakeGraph(): IntakeGraph {
   if (!intakeGraph) throw new Error("graphs not initialized — call initGraphs() first");
   return intakeGraph;
@@ -146,7 +163,11 @@ async function intakeStatus(leadId: string): Promise<IntakeRunResult> {
 
 /** Run the intake pipeline for a new lead until it completes or pauses for approval. */
 export async function runIntakePipeline(leadId: string): Promise<IntakeRunResult> {
-  await requireIntakeGraph().invoke({ leadId }, threadConfig(leadId));
+  try {
+    await requireIntakeGraph().invoke({ leadId }, threadConfig(leadId));
+  } finally {
+    await recordUsage(leadId);
+  }
   return intakeStatus(leadId);
 }
 
@@ -160,7 +181,11 @@ export async function resumeWithDecision(
   const paused = state.tasks.some((task) => task.interrupts.length > 0);
   if (!paused) throw new Error(`lead ${leadId} is not awaiting approval`);
 
-  await graph.invoke(new Command({ resume: decision }), threadConfig(leadId));
+  try {
+    await graph.invoke(new Command({ resume: decision }), threadConfig(leadId));
+  } finally {
+    await recordUsage(leadId);
+  }
   return intakeStatus(leadId);
 }
 
@@ -183,7 +208,11 @@ export async function retryFailedStep(leadId: string): Promise<IntakeRunResult> 
     throw new Error(`lead ${leadId} pipeline has already completed — nothing to retry`);
   }
 
-  await graph.invoke(null, threadConfig(leadId));
+  try {
+    await graph.invoke(null, threadConfig(leadId));
+  } finally {
+    await recordUsage(leadId);
+  }
   return intakeStatus(leadId);
 }
 
@@ -193,6 +222,11 @@ export async function runReplyPipeline(
   replyText: string,
 ): Promise<{ intent: string; responseBody: string | null }> {
   if (!replyGraph) throw new Error("graphs not initialized — call initGraphs() first");
-  const result = await replyGraph.invoke({ leadId, replyText });
+  let result;
+  try {
+    result = await replyGraph.invoke({ leadId, replyText });
+  } finally {
+    await recordUsage(leadId);
+  }
   return { intent: result.intent, responseBody: result.responseBody ?? null };
 }

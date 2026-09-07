@@ -1,6 +1,13 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
-import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
+import {
+  Annotation,
+  END,
+  MessagesAnnotation,
+  START,
+  StateGraph,
+  type LangGraphRunnableConfig,
+} from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
 import { extractLinks, fetchRawHtml, htmlToText, rankCandidateLinks } from "../integrations/enrichment.js";
@@ -52,6 +59,7 @@ export function shouldContinueEnrichment(
 
 async function agentNode(
   state: typeof EnrichmentAgentState.State,
+  runConfig?: LangGraphRunnableConfig,
 ): Promise<Partial<typeof EnrichmentAgentState.State>> {
   const remaining = MAX_STEPS - state.stepCount;
   const systemPrompt = [
@@ -65,7 +73,13 @@ async function agentNode(
     { role: "system", content: systemPrompt },
     ...state.messages,
   ])) as AIMessage;
-  logTokenUsage("enrich_agent_step", response);
+  // leadId rides in on the run config rather than a closure, because this
+  // graph is compiled once at module load and shared across all leads.
+  logTokenUsage(
+    "enrich_agent_step",
+    response,
+    runConfig?.configurable?.leadId as string | undefined,
+  );
 
   const calledTool = Boolean(response.tool_calls && response.tool_calls.length > 0);
   return {
@@ -110,7 +124,10 @@ export interface EnrichmentAgentResult {
  * don't hard-fail the pipeline" pattern every other integration follows.
  * Stateless per call: no checkpointer, unlike the two main pipeline graphs.
  */
-export async function runEnrichmentAgent(homepageUrl: string): Promise<EnrichmentAgentResult | null> {
+export async function runEnrichmentAgent(
+  homepageUrl: string,
+  leadId?: string,
+): Promise<EnrichmentAgentResult | null> {
   const result = await Promise.race([
     enrichmentAgentGraph.invoke(
       {
@@ -121,7 +138,7 @@ export async function runEnrichmentAgent(homepageUrl: string): Promise<Enrichmen
       // Backstop in case the step-budget conditional edge above has a bug —
       // LangGraph's own recommendation is to pair an explicit termination
       // condition with a recursionLimit safety net, not rely on just one.
-      { recursionLimit: MAX_STEPS * 2 + 4 },
+      { recursionLimit: MAX_STEPS * 2 + 4, configurable: { leadId } },
     ),
     timeoutAfter(WALL_CLOCK_TIMEOUT_MS),
   ]);

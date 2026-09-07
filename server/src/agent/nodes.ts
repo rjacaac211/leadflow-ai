@@ -57,7 +57,7 @@ export async function enrichNode(
   let text: string | null = null;
   let pagesVisited = 0;
   try {
-    const agentResult = await runEnrichmentAgent(lead.companyWebsite);
+    const agentResult = await runEnrichmentAgent(lead.companyWebsite, lead.id);
     if (agentResult) {
       text = agentResult.text;
       pagesVisited = agentResult.pagesVisited;
@@ -153,7 +153,7 @@ export async function qualifyNode(
     includeRaw: true,
   });
   const result = await model.invoke(prompt);
-  logTokenUsage("qualify", result.raw as AIMessage);
+  logTokenUsage("qualify", result.raw as AIMessage, lead.id);
   const { ratings, summary } = result.parsed;
 
   const score = computeLeadScore(icp.criteria, ratings);
@@ -247,7 +247,7 @@ export async function draftOutreachNode(
     includeRaw: true,
   });
   const result = await model.invoke(prompt);
-  logTokenUsage("draft_outreach", result.raw as AIMessage);
+  logTokenUsage("draft_outreach", result.raw as AIMessage, lead.id);
   const { subject, body } = result.parsed;
 
   const draft = await prisma.outreachMessage.create({
@@ -301,7 +301,7 @@ export async function critiqueOutreachNode(
     includeRaw: true,
   });
   const result = await model.invoke(prompt);
-  logTokenUsage("critique_outreach", result.raw as AIMessage);
+  logTokenUsage("critique_outreach", result.raw as AIMessage, state.leadId);
 
   const semanticIssues = result.parsed.passes ? [] : result.parsed.issues;
   const issues = [...lintIssues, ...semanticIssues];
@@ -348,7 +348,7 @@ export async function reviseOutreachNode(
     includeRaw: true,
   });
   const result = await model.invoke(prompt);
-  logTokenUsage("revise_outreach", result.raw as AIMessage);
+  logTokenUsage("revise_outreach", result.raw as AIMessage, lead.id);
   const { subject, body } = result.parsed;
 
   const revisionCount = state.revisionCount + 1;
@@ -552,7 +552,7 @@ export async function classifyReplyNode(
       `Conversation so far:\n${buildThreadTranscript(thread)}`,
     ].join("\n"),
   );
-  logTokenUsage("classify_reply", result.raw as AIMessage);
+  logTokenUsage("classify_reply", result.raw as AIMessage, state.leadId);
 
   await recordEvent(lead.id, "reply_classified", {
     intent: result.parsed.intent,
@@ -607,7 +607,7 @@ export async function handleReplyNode(
       `Conversation so far:\n${buildThreadTranscript(thread)}`,
     ].join("\n"),
   );
-  logTokenUsage("handle_reply", result.raw as AIMessage);
+  logTokenUsage("handle_reply", result.raw as AIMessage, state.leadId);
   const responseBody = result.parsed.body;
 
   const sendResult = await sendEmail({

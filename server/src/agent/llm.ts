@@ -3,6 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { accumulateUsage, type TokenUsage } from "./usage.js";
 
 /**
  * USD per 1M tokens, keyed by model id across both providers. If you point
@@ -60,16 +61,32 @@ export function createModel(maxTokens = 2048): ChatAnthropic | ChatOpenAI {
   });
 }
 
-export function logTokenUsage(step: string, message: AIMessage): void {
+/**
+ * Logs one call's token spend and returns it so callers can aggregate.
+ *
+ * Passing `leadId` also rolls the call into that lead's running total (see
+ * usage.ts), which graph.ts drains into an `llm_usage` audit event at the end
+ * of a pipeline run. The offline eval harness passes no leadId and just uses
+ * the return value.
+ *
+ * Returns null when the response carried no usage metadata, or when the
+ * configured model has no pricing entry above — an unpriced model still logs,
+ * but a cost of 0 would be a lie, so nothing is accumulated.
+ */
+export function logTokenUsage(
+  step: string,
+  message: AIMessage,
+  leadId?: string,
+): TokenUsage | null {
   const usage = message.usage_metadata;
-  if (!usage) return;
+  if (!usage) return null;
   const pricing = PRICING_PER_1M_TOKENS_USD[config.llmModel];
   if (!pricing) {
     logger.warn(
       { step, provider: config.llmProvider, model: config.llmModel, ...usage },
       "token usage (no pricing entry for model — cost not estimated)",
     );
-    return;
+    return null;
   }
   const costUsd =
     (usage.input_tokens / 1_000_000) * pricing.input +
@@ -85,4 +102,11 @@ export function logTokenUsage(step: string, message: AIMessage): void {
     },
     "llm token usage",
   );
+  const result: TokenUsage = {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    costUsd,
+  };
+  if (leadId) accumulateUsage(leadId, result);
+  return result;
 }

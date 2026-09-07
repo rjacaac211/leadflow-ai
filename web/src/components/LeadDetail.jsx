@@ -19,6 +19,24 @@ const REPLY_PRESETS = [
   },
 ];
 
+// The pipeline records one `llm_usage` event per graph run (intake, each
+// approval resume, each inbound reply), so a lead accumulates several. Summing
+// them gives what this lead has cost end to end.
+function totalLlmUsage(events) {
+  return events.reduce(
+    (total, event) => {
+      if (event.type !== "llm_usage" || !event.detail) return total;
+      return {
+        calls: total.calls + (event.detail.calls ?? 0),
+        tokens:
+          total.tokens + (event.detail.inputTokens ?? 0) + (event.detail.outputTokens ?? 0),
+        costUsd: total.costUsd + (event.detail.costUsd ?? 0),
+      };
+    },
+    { calls: 0, tokens: 0, costUsd: 0 },
+  );
+}
+
 export function LeadDetail({ leadId, onChanged }) {
   const [lead, setLead] = useState(null);
   const [error, setError] = useState(null);
@@ -47,6 +65,8 @@ export function LeadDetail({ leadId, onChanged }) {
     .reverse()
     .find((m) => m.direction === "OUTBOUND" && m.status === "DRAFT");
 
+  const usage = totalLlmUsage(lead.events);
+
   return (
     <div className="detail">
       <h2>
@@ -65,6 +85,14 @@ export function LeadDetail({ leadId, onChanged }) {
           </span>
         )}
         {lead.hubspotContactId && <span>HubSpot #{lead.hubspotContactId}</span>}
+        {usage.calls > 0 && (
+          <span
+            className="cost"
+            title={`${usage.calls} Claude calls · ${usage.tokens.toLocaleString()} tokens`}
+          >
+            ${usage.costUsd.toFixed(4)} agent cost
+          </span>
+        )}
       </div>
 
       {lead.qualificationReason && (
