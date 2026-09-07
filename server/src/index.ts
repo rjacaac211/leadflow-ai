@@ -35,7 +35,8 @@ async function main(): Promise<void> {
     logger.info(
       {
         port: config.port,
-        model: config.anthropicModel,
+        provider: config.llmProvider,
+        model: config.llmModel,
         hubspot: config.hubspotAccessToken ? "live" : "mock",
         resend: config.resendApiKey ? "live" : "mock",
         slack: config.slackWebhookUrl ? "live" : "mock",

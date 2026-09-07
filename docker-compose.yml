@@ -21,8 +21,14 @@ services:
       dockerfile: server/Dockerfile
     environment:
       DATABASE_URL: postgresql://leadflow:leadflow@postgres:5432/leadflow
+      # Leave LLM_PROVIDER/*_MODEL empty to let config.ts pick its defaults —
+      # Compose injects "" for anything unset, and config.ts uses `||` so an
+      # empty string falls back correctly (see the ??-vs-|| note in CLAUDE.md).
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       WEBHOOK_API_KEY: ${WEBHOOK_API_KEY:-}
       HUBSPOT_ACCESS_TOKEN: ${HUBSPOT_ACCESS_TOKEN:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
