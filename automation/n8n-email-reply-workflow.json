@@ -1,0 +1,54 @@
+{
+  "name": "LeadFlow — inbound email replies",
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "options": {}
+      },
+      "id": "c3d8e2a0-0000-4000-8000-000000000001",
+      "name": "Email Trigger (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "credentials": {
+        "imap": {
+          "id": "REPLACE_WITH_YOUR_IMAP_CREDENTIAL_ID",
+          "name": "LeadFlow demo mailbox"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://server:4000/api/webhooks/email-reply",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.LEADFLOW_WEBHOOK_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ email: ($json.from.match(/<([^>]+)>/) || [null, $json.from])[1].trim().toLowerCase(), message: ($json.textPlain || $json.textHtml || '').trim() }) }}",
+        "options": {}
+      },
+      "id": "c3d8e2a0-0000-4000-8000-000000000002",
+      "name": "Send Reply to LeadFlow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [[{ "node": "Send Reply to LeadFlow", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -11,6 +11,9 @@ export const IntakeState = Annotation.Root({
   draftMessageId: Annotation<string | null>,
   draftSubject: Annotation<string>,
   draftBody: Annotation<string>,
+  revisionCount: Annotation<number>,
+  critiquePassed: Annotation<boolean>,
+  critiqueIssues: Annotation<string[]>,
   approved: Annotation<boolean>,
 });
 
@@ -24,11 +27,23 @@ export interface ApprovalDecision {
   reason?: string;
 }
 
+/** Reply intent taxonomy. Auto-reply eligibility for each is in nodes.ts's AUTO_REPLY_INTENTS. */
+export type ReplyIntent =
+  | "interested"
+  | "meeting_request"
+  | "pricing_question"
+  | "product_question"
+  | "objection"
+  | "referral"
+  | "opt_out"
+  | "wrong_person"
+  | "other";
+
 /** State for the inbound-reply pipeline (stateless, one run per reply). */
 export const ReplyState = Annotation.Root({
   leadId: Annotation<string>,
   replyText: Annotation<string>,
-  intent: Annotation<"interested" | "question" | "opt_out" | "other">,
+  intent: Annotation<ReplyIntent>,
   intentReasoning: Annotation<string>,
   responseBody: Annotation<string | null>,
 });

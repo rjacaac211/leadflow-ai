@@ -21,13 +21,21 @@ services:
       dockerfile: server/Dockerfile
     environment:
       DATABASE_URL: postgresql://leadflow:leadflow@postgres:5432/leadflow
+      # Leave LLM_PROVIDER/*_MODEL empty to let config.ts pick its defaults —
+      # Compose injects "" for anything unset, and config.ts uses `||` so an
+      # empty string falls back correctly (see the ??-vs-|| note in CLAUDE.md).
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       WEBHOOK_API_KEY: ${WEBHOOK_API_KEY:-}
       HUBSPOT_ACCESS_TOKEN: ${HUBSPOT_ACCESS_TOKEN:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       OUTREACH_FROM_EMAIL: ${OUTREACH_FROM_EMAIL:-}
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_APPROVAL_CHANNEL: ${SLACK_APPROVAL_CHANNEL:-}
       PORT: 4000
     ports:
       - "4000:4000"
@@ -53,7 +61,10 @@ services:
     environment:
       N8N_SECURE_COOKIE: "false"
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
       LEADFLOW_WEBHOOK_KEY: ${WEBHOOK_API_KEY:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
     volumes:
       - n8ndata:/home/node/.n8n
 

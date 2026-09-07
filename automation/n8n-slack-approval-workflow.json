@@ -1,0 +1,104 @@
+{
+  "name": "LeadFlow — Slack interactive approval",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "leadflow-slack-approval",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000001",
+      "name": "Slack Interaction Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "leadflow-slack-approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const crypto = require('crypto');\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = headers['x-slack-request-timestamp'];\nconst slackSignature = headers['x-slack-signature'];\nconst signingSecret = $env.SLACK_SIGNING_SECRET;\n\nif (!timestamp || !slackSignature || !signingSecret) {\n  throw new Error('missing Slack signature headers or SLACK_SIGNING_SECRET');\n}\n\n// Slack recommends rejecting anything older than ~5 minutes to block replay attacks.\nconst nowSeconds = Math.floor(Date.now() / 1000);\nif (Math.abs(nowSeconds - Number(timestamp)) > 60 * 5) {\n  throw new Error('Slack request timestamp is stale (possible replay)');\n}\n\n// Requires the Webhook node's \"Raw Body\" option — Slack signs the exact raw\n// bytes, and a re-stringified parsed body will not match byte-for-byte.\nconst rawBody = Buffer.from(item.binary.data.data, 'base64').toString('utf8');\nconst baseString = `v0:${timestamp}:${rawBody}`;\nconst expectedSignature =\n  'v0=' + crypto.createHmac('sha256', signingSecret).update(baseString).digest('hex');\n\nconst provided = Buffer.from(slackSignature);\nconst expected = Buffer.from(expectedSignature);\nif (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {\n  throw new Error('invalid Slack signature');\n}\n\nconst payload = JSON.parse(item.json.body.payload);\nconst action = payload.actions && payload.actions[0];\nif (!action) {\n  throw new Error('no action in Slack interaction payload');\n}\n\nconst decision =\n  action.action_id === 'leadflow_approve'\n    ? 'approve'\n    : action.action_id === 'leadflow_reject'\n      ? 'reject'\n      : null;\nif (!decision) {\n  throw new Error(`unrecognized action_id: ${action.action_id}`);\n}\n\nreturn [\n  {\n    json: {\n      leadId: action.value,\n      decision,\n      responseUrl: payload.response_url,\n      userName: (payload.user && payload.user.username) || null,\n    },\n  },\n];\n"
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000002",
+      "name": "Verify & Parse Slack Interaction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000003",
+      "name": "Ack Slack (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [440, -80]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "invalid Slack signature",
+        "options": { "responseCode": 401 }
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000004",
+      "name": "Reject Unauthorized (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [440, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://server:4000/api/leads/' + $json.leadId + '/' + $json.decision }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {}
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000005",
+      "name": "Call Approve or Reject",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Verify & Parse Slack Interaction').item.json.responseUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ replace_original: true, text: ($('Verify & Parse Slack Interaction').item.json.decision === 'approve' ? ':white_check_mark: Approved' : ':x: Rejected') + ' by ' + ($('Verify & Parse Slack Interaction').item.json.userName || 'a teammate') + '.' }) }}",
+        "options": {}
+      },
+      "id": "f7a2c9d1-0000-4000-8000-000000000006",
+      "name": "Update Slack Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -80]
+    }
+  ],
+  "connections": {
+    "Slack Interaction Webhook": {
+      "main": [[{ "node": "Verify & Parse Slack Interaction", "type": "main", "index": 0 }]]
+    },
+    "Verify & Parse Slack Interaction": {
+      "main": [
+        [{ "node": "Ack Slack (200)", "type": "main", "index": 0 }],
+        [{ "node": "Reject Unauthorized (401)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ack Slack (200)": {
+      "main": [[{ "node": "Call Approve or Reject", "type": "main", "index": 0 }]]
+    },
+    "Call Approve or Reject": {
+      "main": [[{ "node": "Update Slack Message", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

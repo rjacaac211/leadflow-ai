@@ -217,6 +217,15 @@ h3 {
   color: var(--accent);
 }
 
+.cost {
+  font-variant-numeric: tabular-nums;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.8rem;
+  cursor: help;
+}
+
 .reason {
   margin: 0.5rem 0;
   padding: 0.6rem 0.9rem;

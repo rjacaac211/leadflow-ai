@@ -1,0 +1,226 @@
+{
+  "$comment": [
+    "Labeled leads for the offline qualification eval (npm run eval).",
+    "`enrichment` is canned company-website text, NOT crawled at eval time — the",
+    "harness measures qualification judgment, not whether some third party's",
+    "marketing site changed overnight. Keep it that way.",
+    "Every `scoreRange` must sit entirely inside one tier band of",
+    "icp.config.json's tierThresholds, so `tier` is never ambiguous.",
+    "`qualified` is a SEPARATE label, not derivable from the score: a",
+    "criterion veto (disqualifyAtOrBelow) can reject a lead that scores well,",
+    "which is exactly what the competitor and B2C cases below check.",
+    "tests/eval-metrics.test.ts enforces this."
+  ],
+  "cases": [
+    {
+      "id": "hot-revops-midmarket-saas",
+      "notes": "Textbook ICP: RevOps title, B2B SaaS, 120 employees, explicit spreadsheet pain, explicit timeline. If this isn't hot, something is badly wrong.",
+      "lead": {
+        "name": "Priya Raman",
+        "email": "priya.raman@northwindops.com",
+        "company": "Northwind Ops",
+        "companyWebsite": "https://northwindops.com",
+        "message": "I lead RevOps here. Our team of 18 AEs still builds the weekly forecast by hand in Google Sheets and it takes two people most of Monday. We're budgeted to fix this and want to pick a vendor before the end of the quarter.",
+        "source": "webhook"
+      },
+      "enrichment": "Northwind Ops is a B2B SaaS platform for warehouse inventory management, serving mid-market distributors across North America. Founded 2018. About 120 employees, with a direct sales team covering North America and EMEA. Customers include regional distributors and 3PL providers. Careers page lists open roles for Account Executive, Sales Development Rep, and Revenue Operations Analyst.",
+      "expected": { "tier": "hot", "qualified": true, "scoreRange": [80, 100] }
+    },
+    {
+      "id": "hot-head-of-sales-consultancy",
+      "notes": "B2B services rather than software, but a structured pipeline, a decision-maker title, clear forecasting pain and a near-term timeline.",
+      "lead": {
+        "name": "Marcus Bell",
+        "email": "m.bell@arcadiapartners.co",
+        "company": "Arcadia Partners",
+        "companyWebsite": "https://arcadiapartners.co",
+        "message": "Head of Sales here. We've outgrown our CRM's reporting — I genuinely cannot tell you what we'll close this quarter without rebuilding a spreadsheet every Friday. Looking to evaluate a couple of options over the next few weeks.",
+        "source": "webhook"
+      },
+      "enrichment": "Arcadia Partners is a technology consultancy delivering cloud migration and data engineering projects for mid-market enterprises. Roughly 60 consultants across three offices. Engagements are sold through a named-account sales team of 8. The site lists case studies with financial services and logistics clients and a standard six-to-twelve-week delivery model.",
+      "expected": { "tier": "hot", "qualified": true, "scoreRange": [80, 100] }
+    },
+    {
+      "id": "hot-coo-scaling-sales-team",
+      "notes": "COO — an explicitly named primary buyer in the ICP. Scaling pain is the pain the product solves.",
+      "lead": {
+        "name": "Danielle Okafor",
+        "email": "danielle@ferrymark.io",
+        "company": "Ferrymark",
+        "companyWebsite": "https://ferrymark.io",
+        "message": "COO at Ferrymark. We went from 6 reps to 22 in a year and our pipeline reporting hasn't kept up — every number in our board deck is assembled by hand. I'd like to see a demo this month.",
+        "source": "n8n-form"
+      },
+      "enrichment": "Ferrymark builds compliance automation software for B2B fintech companies. Series B, approximately 180 employees. The product is sold through an enterprise sales motion with annual contracts. The site advertises SOC 2 Type II, a partner program, and a customer list of payment processors and neobanks.",
+      "expected": { "tier": "hot", "qualified": true, "scoreRange": [80, 100] }
+    },
+    {
+      "id": "warm-founder-small-b2b-software",
+      "notes": "Right industry and real authority, but 14 employees is under the 20-500 band and there's no timeline. Should land warm, not hot.",
+      "lead": {
+        "name": "Tomas Lind",
+        "email": "tomas@kettleworks.dev",
+        "company": "Kettleworks",
+        "companyWebsite": "https://kettleworks.dev",
+        "message": "Founder here. We're starting to do real outbound and I can see reporting becoming a problem soon. Not urgent, just looking at what's out there.",
+        "source": "webhook"
+      },
+      "enrichment": "Kettleworks builds developer tooling for API testing and monitoring, sold B2B on a self-serve and annual-contract mix. A small team — the about page lists 14 people, including two salespeople hired this year. Blog posts focus on engineering topics rather than sales.",
+      "expected": { "tier": "warm", "qualified": true, "scoreRange": [45, 79] }
+    },
+    {
+      "id": "warm-ops-manager-no-urgency",
+      "notes": "Good industry and company size and a concrete pain, but a mid-level title and explicitly no timeline. Urgency should score near zero.",
+      "lead": {
+        "name": "Grace Whitfield",
+        "email": "gwhitfield@bramblelogistics.com",
+        "company": "Bramble Logistics",
+        "companyWebsite": "https://bramblelogistics.com",
+        "message": "I'm an operations manager and I put together the sales reports each month. It's a lot of manual copying between systems. I'm gathering information for a review we'll run sometime next year.",
+        "source": "webhook"
+      },
+      "enrichment": "Bramble Logistics provides freight brokerage and supply-chain services to B2B shippers. Around 210 employees. The company sells through a regional account-management team and publishes quarterly shipping-market reports. Site mentions a recent CRM rollout.",
+      "expected": { "tier": "warm", "qualified": true, "scoreRange": [45, 79] }
+    },
+    {
+      "id": "warm-strong-claim-weak-website",
+      "notes": "Contradiction case. The message claims a 30-rep sales org; the website is plainly a one-person consultancy. The agent should weight the evidence, not the claim, and must not rate this hot.",
+      "lead": {
+        "name": "Alan Pryce",
+        "email": "alan@pryceadvisory.com",
+        "company": "Pryce Advisory",
+        "companyWebsite": "https://pryceadvisory.com",
+        "message": "We have 30 reps and desperately need forecasting — this is our top priority this quarter and we have budget approved. Can we talk today?",
+        "source": "webhook"
+      },
+      "enrichment": "Pryce Advisory — independent management consulting by Alan Pryce. \"I work with a small number of clients at a time on go-to-market strategy.\" The site is four pages: home, about, a short list of past engagements, and a contact form. No team page, no careers page, no customer logos.",
+      "expected": { "tier": "warm", "qualified": true, "scoreRange": [40, 79] }
+    },
+    {
+      "id": "warm-enterprise-above-icp",
+      "notes": "Real pain and a real buyer, but 8,000 employees is far above the 20-500 band and enterprise procurement is slow. Size fit should drag this out of hot.",
+      "lead": {
+        "name": "Robert Nkemelu",
+        "email": "robert.nkemelu@halbrookfinancial.com",
+        "company": "Halbrook Financial Group",
+        "companyWebsite": "https://halbrookfinancial.com",
+        "message": "VP of Sales Operations. Our forecasting process spans four business units and is largely manual. Any evaluation would go through procurement and security review, so realistically this is a next-fiscal-year decision.",
+        "source": "webhook"
+      },
+      "enrichment": "Halbrook Financial Group is a diversified financial services firm offering commercial banking, asset management, and insurance products. Approximately 8,000 employees across 40 offices. Investor relations pages describe multiple business units and a recent multi-year digital transformation programme.",
+      "expected": { "tier": "warm", "qualified": true, "scoreRange": [40, 79] }
+    },
+    {
+      "id": "warm-technical-ic-good-company",
+      "notes": "Perfect-fit company and genuine pain, but a sales engineer has no purchasing authority. Buyer_role should score low while everything else scores well.",
+      "lead": {
+        "name": "Ines Duarte",
+        "email": "ines.duarte@voltarcsystems.com",
+        "company": "Voltarc Systems",
+        "companyWebsite": "https://voltarcsystems.com",
+        "message": "I'm a sales engineer on the pre-sales team. Our reps waste hours assembling pipeline numbers and I keep getting pulled into it. I don't own the budget but I wanted to see what's available and pass it on.",
+        "source": "webhook"
+      },
+      "enrichment": "Voltarc Systems sells industrial IoT monitoring software to B2B manufacturers. About 95 employees, including a 12-person sales team and a pre-sales engineering group. The site lists an annual user conference and a partner integration directory.",
+      "expected": { "tier": "warm", "qualified": true, "scoreRange": [40, 79] }
+    },
+    {
+      "id": "hot-strong-buyer-no-website",
+      "notes": "A textbook buyer who simply didn't fill in the website field, so there is no enrichment to judge industry from. Absent evidence must score low but NOT veto — a live run dropped exactly this lead when industry_fit's veto sat at <=1, because 'no evidence' and 'wrong industry' both produce a low rating. Guards the distinction.",
+      "lead": {
+        "name": "Danielle Okafor",
+        "email": "danielle@ferrymark.io",
+        "company": "Ferrymark",
+        "companyWebsite": null,
+        "message": "COO at Ferrymark. We went from 6 reps to 22 in a year and our pipeline reporting hasn't kept up — every number in our board deck is assembled by hand. I'd like to see a demo this month.",
+        "source": "webhook"
+      },
+      "enrichment": "",
+      "expected": { "tier": "hot", "qualified": true, "scoreRange": [80, 95] }
+    },
+    {
+      "id": "cold-sparse-but-plausible",
+      "notes": "Thin but real: a plausible B2B company and a named contact, with almost nothing to go on. Should score low for lack of evidence without being discarded outright.",
+      "lead": {
+        "name": "Sam Delaney",
+        "email": "sam@quillbase.com",
+        "company": "Quillbase",
+        "companyWebsite": "https://quillbase.com",
+        "message": "Interested in learning more about your platform.",
+        "source": "webhook"
+      },
+      "enrichment": "Quillbase — document collaboration for teams. Sign up free. Pricing: Starter, Team, Business. Contact us.",
+      "expected": { "tier": "cold", "qualified": true, "scoreRange": [25, 39] }
+    },
+    {
+      "id": "cold-empty-enrichment-junk",
+      "notes": "The no-evidence guard. Free email, no company, no website, no enrichment at all. The prompt says to score low rather than guess — this case fails loudly if the model invents fit.",
+      "lead": {
+        "name": "J",
+        "email": "jjjj9182@gmail.com",
+        "company": null,
+        "companyWebsite": null,
+        "message": "hi",
+        "source": "webhook"
+      },
+      "enrichment": "",
+      "expected": { "tier": "cold", "qualified": false, "scoreRange": [0, 24] }
+    },
+    {
+      "id": "cold-student-job-seeker",
+      "notes": "Not a buyer at all. Should be disqualified outright.",
+      "lead": {
+        "name": "Hyunwoo Park",
+        "email": "hpark@student.westbridge.edu",
+        "company": "Westbridge University",
+        "companyWebsite": "https://westbridge.edu",
+        "message": "I'm a final-year computer science student writing my dissertation on sales forecasting algorithms. Could someone share technical details about your models? Also, are you hiring interns?",
+        "source": "webhook"
+      },
+      "enrichment": "Westbridge University is a public research university offering undergraduate and postgraduate degrees across arts, sciences, and engineering. Around 24,000 students. Pages cover admissions, campus life, research centres, and alumni giving.",
+      "expected": { "tier": "cold", "qualified": false, "scoreRange": [0, 24] }
+    },
+    {
+      "id": "cold-competitor-recon",
+      "notes": "A competing vendor doing market research. Right vocabulary, wrong intent. Scores ABOVE the disqualify cutoff on industry and headcount alone, so the pain_signal veto is the only thing that rejects it — this is the case that motivated disqualifyAtOrBelow.",
+      "lead": {
+        "name": "Yara Mansour",
+        "email": "yara@pipelinesense.ai",
+        "company": "PipelineSense",
+        "companyWebsite": "https://pipelinesense.ai",
+        "message": "We're building in the revenue forecasting space and are benchmarking competitors. Could you send over pricing tiers and a feature matrix? Happy to share our own roadmap in return.",
+        "source": "webhook"
+      },
+      "enrichment": "PipelineSense is an AI-powered revenue forecasting and pipeline analytics platform for sales teams. Replace spreadsheet forecasting with real-time predictions. Compare PipelineSense against other forecasting tools. Book a demo. Seed-stage, 22 employees.",
+      "expected": { "tier": "cold", "qualified": false, "scoreRange": [25, 39] }
+    },
+    {
+      "id": "warm-b2c-ecommerce-vetoed",
+      "notes": "Right company size and a plausible founder, but B2C retail with no sales pipeline. The weighted score lands warm — real headcount, real reporting pain — so only the industry_fit veto keeps it out of outreach. Labeled warm-but-rejected on purpose: score and admission are two different questions.",
+      "lead": {
+        "name": "Marta Kowalczyk",
+        "email": "marta@emberandoak.shop",
+        "company": "Ember & Oak",
+        "companyWebsite": "https://emberandoak.shop",
+        "message": "We're growing fast and our reporting is a mess — everything lives in spreadsheets. Would your product help us understand our numbers better?",
+        "source": "webhook"
+      },
+      "enrichment": "Ember & Oak makes small-batch soy candles and home fragrance, sold direct to consumers through our online shop and a flagship store. Free shipping over £40. Shop by scent. Our story. Wholesale enquiries welcome. Around 45 staff, mostly in production and fulfilment.",
+      "expected": { "tier": "warm", "qualified": false, "scoreRange": [40, 60] }
+    },
+    {
+      "id": "cold-inbound-vendor-pitch",
+      "notes": "Not a lead — an agency selling *to* us through the contact form. Should be disqualified.",
+      "lead": {
+        "name": "Dmitri Volkov",
+        "email": "dmitri@rankforge-seo.net",
+        "company": "RankForge SEO",
+        "companyWebsite": "https://rankforge-seo.net",
+        "message": "Hello! I reviewed your website and found 47 critical SEO issues holding back your rankings. We help SaaS companies triple organic traffic in 90 days. Can I send over a free audit?",
+        "source": "webhook"
+      },
+      "enrichment": "RankForge SEO — guaranteed first-page rankings. Link building, technical audits, content at scale. Packages from $499/month. Over 800 happy clients. Get your free audit today.",
+      "expected": { "tier": "cold", "qualified": false, "scoreRange": [0, 24] }
+    }
+  ]
+}
